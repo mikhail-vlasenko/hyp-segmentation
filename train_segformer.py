@@ -8,6 +8,8 @@ import numpy as np
 from tqdm import tqdm
 from torchmetrics.classification import MulticlassJaccardIndex
 
+from segformer_head import HyperbolicSegformerDecodeHead
+
 # Configuration
 MODEL_NAME = "nvidia/segformer-b0-finetuned-ade-512-512"
 TRAIN_ANNOTATION_DIR = "/home/misha/data/PartImageNet/annotations"
@@ -70,6 +72,7 @@ model = SegformerForSemanticSegmentation.from_pretrained(
     num_labels=NUM_CLASSES,
     ignore_mismatched_sizes=True
 )
+model.decode_head = HyperbolicSegformerDecodeHead.from_segformer_decode_head(model.decode_head, NUM_CLASSES)
 
 # Create datasets and dataloaders
 train_dataset = SPINSegmentationDataset(
