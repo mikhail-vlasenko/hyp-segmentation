@@ -41,21 +41,26 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
         hidden_states = self.activation(hidden_states)
         hidden_states = self.dropout(hidden_states)
 
+        hidden_states = self.dim_reduce(hidden_states)
+
         # print(f"{hidden_states.shape=}")  # batch_size, 256, height/4, width/4
 
         # logits are of shape (batch_size, num_labels, height/4, width/4)
-        # logits = self.classifier(hidden_states)
-        # do the hyperbolic stuff here
-        ball = gt.PoincareBall(c=1.0)
-        output = hidden_states.permute((0, 2, 3, 1))
-        out_proj = ball.expmap0(output)  # seems to just map the vector to the ball
-        output = self.embedding_space.run_log_torch(out_proj, self.offsets, self.normals, 1.0)
-        logits = output.permute((0, 3, 1, 2))
+        if self.hyperbolic:
+            ball = gt.PoincareBall(c=1.0)
+            output = hidden_states.permute((0, 2, 3, 1))
+            out_proj = ball.expmap0(output)  # seems to just map the vector to the ball
+            output = self.embedding_space.run_log_torch(out_proj, self.offsets, self.normals, 1.0)
+            logits = output.permute((0, 3, 1, 2))
+        else:
+            logits = self.classifier(hidden_states)
 
         return logits
 
-    def __post_init__(self, num_classes):
-        self.dim = 256
+    def __post_init__(self, num_classes, dim, hyperbolic=True):
+        decoder_hidden_size = 256
+        self.dim = dim
+        self.hyperbolic = hyperbolic
         self.ball = gt.PoincareBall(c=1.0)
         normals_ = torch.randn(num_classes, self.dim) * 1e-5
         normals_ = pmath.expmap0(normals_, k=self.ball.k)
@@ -70,10 +75,22 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
         self.normals.requires_grad_()
         self.offsets.requires_grad_()
 
+        self.dim_reduce = nn.Identity()
+        if self.dim != decoder_hidden_size:
+            self.dim_reduce = nn.Sequential(
+                nn.Conv2d(decoder_hidden_size, self.dim, kernel_size=1),
+                nn.BatchNorm2d(self.dim),
+                # nn.ReLU(),  # leads to a failing assert on NaNs in hyperbolic almost immediately
+            )
+
+        self.classifier = nn.Conv2d(self.dim, num_classes, kernel_size=1)
+
     @classmethod
-    def from_segformer_decode_head(cls, segformer_decode_head: SegformerDecodeHead, num_classes) -> "HyperbolicSegformerDecodeHead":
+    def from_segformer_decode_head(
+            cls, segformer_decode_head: SegformerDecodeHead, num_classes, dim, hyperbolic
+    ) -> "HyperbolicSegformerDecodeHead":
         segformer_decode_head.__class__ = cls
 
-        segformer_decode_head.__post_init__(num_classes)
+        segformer_decode_head.__post_init__(num_classes, dim, hyperbolic)
 
         return segformer_decode_head

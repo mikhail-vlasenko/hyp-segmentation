@@ -17,7 +17,7 @@ TRAIN_IMAGE_DIR = "/home/misha/data/PartImageNet/images"
 NUM_CLASSES = 204  # 203 classes + 1 background
 BATCH_SIZE = 8
 NUM_EPOCHS = 10
-LEARNING_RATE = 5e-5
+LEARNING_RATE = 1e-4
 
 
 class SPINSegmentationDataset(Dataset):
@@ -72,7 +72,7 @@ model = SegformerForSemanticSegmentation.from_pretrained(
     num_labels=NUM_CLASSES,
     ignore_mismatched_sizes=True
 )
-model.decode_head = HyperbolicSegformerDecodeHead.from_segformer_decode_head(model.decode_head, NUM_CLASSES)
+model.decode_head = HyperbolicSegformerDecodeHead.from_segformer_decode_head(model.decode_head, NUM_CLASSES, 8, hyperbolic=True)
 
 # Create datasets and dataloaders
 train_dataset = SPINSegmentationDataset(
