@@ -16,13 +16,14 @@ from torchvision.transforms import v2 as transforms
 import torchvision.transforms.functional as TF
 
 # Configuration
-MODEL_NAME = "nvidia/segformer-b0-finetuned-ade-512-512"
+MODEL_NAME = "nvidia/segformer-b2-finetuned-ade-512-512"
 TRAIN_ANNOTATION_DIR = "/home/misha/data/PartImageNet/annotations"  # Replace with your actual path
 TRAIN_IMAGE_DIR = "/home/misha/data/PartImageNet/images"  # Replace with your actual path
 NUM_CLASSES = 204  # 203 classes + 1 background
 BATCH_SIZE = 8
 NUM_EPOCHS = 20
 LEARNING_RATE = 2e-4
+CROP_SIZE = (0.8, 0.8)
 
 def seed_everything(seed: int):
     import random, os
@@ -48,9 +49,11 @@ class RandomCropAndFlip:
 
     def __call__(self, image, segmentation_map):
         # Get parameters for a random crop
-        # i, j, h, w = transforms.RandomCrop.get_params(image, output_size=self.crop_size)
-        # image = TF.crop(image, i, j, h, w)
-        # segmentation_map = TF.crop(segmentation_map, i, j, h, w)
+        initial_size = image.size
+        crop_size = (int(initial_size[1] * self.crop_size[1]), int(initial_size[0] * self.crop_size[0]))
+        i, j, h, w = transforms.RandomCrop.get_params(image, output_size=crop_size)
+        image = TF.crop(image, i, j, h, w)
+        segmentation_map = TF.crop(segmentation_map, i, j, h, w)
 
         # Random horizontal flip with 50% probability
         if np.random.random() > 0.5:
@@ -71,7 +74,7 @@ class SPINSegmentationDataset(Dataset):
         self.split = split
         if split == "train":
             # Use a torch transform for training augmentations
-            self.transform = RandomCropAndFlip(crop_size=(512, 512))
+            self.transform = RandomCropAndFlip(crop_size=CROP_SIZE)
         else:
             self.transform = None
 
@@ -115,7 +118,7 @@ model = SegformerForSemanticSegmentation.from_pretrained(
     num_labels=NUM_CLASSES,
     ignore_mismatched_sizes=True
 )
-model.decode_head = HyperbolicSegformerDecodeHead.from_segformer_decode_head(model.decode_head, NUM_CLASSES, 256, hyperbolic=False)
+model.decode_head = HyperbolicSegformerDecodeHead.from_segformer_decode_head(model.decode_head, NUM_CLASSES, None, hyperbolic=False)
 
 # Create datasets and dataloaders
 train_dataset = SPINSegmentationDataset(
@@ -146,6 +149,7 @@ wandb.init(project="hyperbolic-segmentation", config={
     "num_epochs": NUM_EPOCHS,
     "learning_rate": LEARNING_RATE,
     "num_classes": NUM_CLASSES,
+    "crop_size": CROP_SIZE,
 })
 
 # Metric

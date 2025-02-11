@@ -57,9 +57,11 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
 
         return logits
 
-    def __post_init__(self, num_classes, dim, hyperbolic=True):
-        decoder_hidden_size = 256
-        self.dim = dim
+    def __post_init__(self, num_classes, dim=None, hyperbolic=True):
+        if dim is None:
+            self.dim = self.config.decoder_hidden_size
+        else:
+            self.dim = dim
         self.hyperbolic = hyperbolic
         self.ball = gt.PoincareBall(c=1.0)
         normals_ = torch.randn(num_classes, self.dim) * 1e-5
@@ -76,9 +78,9 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
         self.offsets.requires_grad_()
 
         self.dim_reduce = nn.Identity()
-        if self.dim != decoder_hidden_size:
+        if self.dim != self.config.decoder_hidden_size:
             self.dim_reduce = nn.Sequential(
-                nn.Conv2d(decoder_hidden_size, self.dim, kernel_size=1),
+                nn.Conv2d(self.config.decoder_hidden_size, self.dim, kernel_size=1),
                 nn.BatchNorm2d(self.dim),
                 # nn.ReLU(),  # leads to a failing assert on NaNs in hyperbolic almost immediately
             )
