@@ -7,18 +7,56 @@ from PIL import Image
 import numpy as np
 from tqdm import tqdm
 from torchmetrics.classification import MulticlassJaccardIndex
+import os
+import wandb
 
 from segformer_head import HyperbolicSegformerDecodeHead
 
+from torchvision.transforms import v2 as transforms
+import torchvision.transforms.functional as TF
+
 # Configuration
 MODEL_NAME = "nvidia/segformer-b0-finetuned-ade-512-512"
-TRAIN_ANNOTATION_DIR = "/home/misha/data/PartImageNet/annotations"
-TRAIN_IMAGE_DIR = "/home/misha/data/PartImageNet/images"
+TRAIN_ANNOTATION_DIR = "/home/misha/data/PartImageNet/annotations"  # Replace with your actual path
+TRAIN_IMAGE_DIR = "/home/misha/data/PartImageNet/images"  # Replace with your actual path
 NUM_CLASSES = 204  # 203 classes + 1 background
 BATCH_SIZE = 8
-NUM_EPOCHS = 10
-LEARNING_RATE = 1e-4
+NUM_EPOCHS = 20
+LEARNING_RATE = 2e-4
 
+def seed_everything(seed: int):
+    import random, os
+    import numpy as np
+    import torch
+
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+
+seed_everything(42)
+
+class RandomCropAndFlip:
+    """
+    A custom transform that applies a random crop and random horizontal flip
+    to both an image and its segmentation map.
+    """
+    def __init__(self, crop_size):
+        self.crop_size = crop_size
+
+    def __call__(self, image, segmentation_map):
+        # Get parameters for a random crop
+        # i, j, h, w = transforms.RandomCrop.get_params(image, output_size=self.crop_size)
+        # image = TF.crop(image, i, j, h, w)
+        # segmentation_map = TF.crop(segmentation_map, i, j, h, w)
+
+        # Random horizontal flip with 50% probability
+        if np.random.random() > 0.5:
+            image = TF.hflip(image)
+            segmentation_map = TF.hflip(segmentation_map)
+        return image, segmentation_map
 
 class SPINSegmentationDataset(Dataset):
     def __init__(self, annotation_dir, image_dir, split, processor):
@@ -30,6 +68,12 @@ class SPINSegmentationDataset(Dataset):
         )
         self.processor = processor
         self.image_ids = self.spin_api.getImgIds()
+        self.split = split
+        if split == "train":
+            # Use a torch transform for training augmentations
+            self.transform = RandomCropAndFlip(crop_size=(512, 512))
+        else:
+            self.transform = None
 
     def __len__(self):
         return len(self.image_ids)
@@ -45,8 +89,12 @@ class SPINSegmentationDataset(Dataset):
             self.spin_api.subparts, image_id, background_class=0
         )
 
-        # Convert to PIL Image for processing
+        # Convert segmentation map to PIL Image (ensure mode 'L' or 'P' if needed)
         segmentation_map = Image.fromarray(segmentation_map.astype('uint8'))
+
+        # Apply torch transforms if in training mode
+        if self.transform is not None:
+            image, segmentation_map = self.transform(image, segmentation_map)
 
         # Process with Segformer processor
         inputs = self.processor(
@@ -55,14 +103,9 @@ class SPINSegmentationDataset(Dataset):
             return_tensors="pt"
         )
 
-        # Remove batch dimension
+        # Remove batch dimension from all tensor outputs
         inputs = {k: v.squeeze() for k, v in inputs.items()}
-
         return inputs
-
-    def num_classes(self):
-        return len(self.spin_api.get_categories(granularity="subpart"))
-
 
 # Initialize processor and model
 processor = SegformerImageProcessor.from_pretrained(MODEL_NAME)
@@ -72,7 +115,7 @@ model = SegformerForSemanticSegmentation.from_pretrained(
     num_labels=NUM_CLASSES,
     ignore_mismatched_sizes=True
 )
-model.decode_head = HyperbolicSegformerDecodeHead.from_segformer_decode_head(model.decode_head, NUM_CLASSES, 8, hyperbolic=True)
+model.decode_head = HyperbolicSegformerDecodeHead.from_segformer_decode_head(model.decode_head, NUM_CLASSES, 256, hyperbolic=False)
 
 # Create datasets and dataloaders
 train_dataset = SPINSegmentationDataset(
@@ -88,7 +131,6 @@ val_dataset = SPINSegmentationDataset(
     processor
 )
 
-
 train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
@@ -96,6 +138,15 @@ val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+
+# Initialize wandb reporting
+wandb.init(project="hyperbolic-segmentation", config={
+    "model_name": MODEL_NAME,
+    "batch_size": BATCH_SIZE,
+    "num_epochs": NUM_EPOCHS,
+    "learning_rate": LEARNING_RATE,
+    "num_classes": NUM_CLASSES,
+})
 
 # Metric
 metric = MulticlassJaccardIndex(num_classes=NUM_CLASSES, ignore_index=0).to(device)
@@ -129,13 +180,13 @@ for epoch in range(NUM_EPOCHS):
     with torch.no_grad():
         for batch in tqdm(val_dataloader):
             pixel_values = batch["pixel_values"].to(device)
-            labels = batch["labels"].to(device)  # batch_size, h, w
+            labels = batch["labels"].to(device)  # shape: (batch_size, h, w)
 
             outputs = model(pixel_values=pixel_values, labels=labels)
             val_loss += outputs.loss.item()
 
             # Upsample logits to original image size
-            logits = outputs.logits  # shape (batch_size, num_labels, h/4, w/4)
+            logits = outputs.logits  # shape: (batch_size, num_labels, h/4, w/4)
             upsampled_logits = torch.nn.functional.interpolate(
                 logits,
                 size=labels.shape[-2:],  # (height, width)
@@ -148,8 +199,17 @@ for epoch in range(NUM_EPOCHS):
 
     miou = metric.compute()
     avg_val_loss = val_loss / len(val_dataloader)
-    print(f"Validation loss: {avg_val_loss:.4f}, mIoU: {miou:.4f}\n")
+    print(f"Validation loss: {avg_val_loss:.4f}, mIoU: {miou:.4f} (where 1 is optimal)\n")
+
+    # Log metrics to wandb
+    wandb.log({
+        "epoch": epoch + 1,
+        "train_loss": avg_loss,
+        "val_loss": avg_val_loss,
+        "mIoU": miou,
+    })
 
 # Save the fine-tuned model
 model.save_pretrained("segformer-finetuned-spin")
 processor.save_pretrained("segformer-finetuned-spin")
+wandb.finish()

@@ -5,3 +5,6 @@ numpy~=2.0.1
 transformers~=4.48.1
 pillow~=11.1.0
 tqdm~=4.66.5
+geoopt~=0.5.1
+wandb~=0.19.5
+torchvision~=0.20.1
