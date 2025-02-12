@@ -237,8 +237,8 @@ def parse_args():
 
 def main():
     args = parse_args()
-    train_annotation_dir = os.path.join(args.train_dir, "annotations")
-    train_image_dir = os.path.join(args.train_dir, "images")
+    dataset_annotation_dir = os.path.join(args.dataset_dir, "annotations")
+    dataset_image_dir = os.path.join(args.dataset_dir, "images")
 
     NUM_CLASSES = 204  # 203 classes + 1 background
     L.seed_everything(args.seed, workers=True)
@@ -248,8 +248,8 @@ def main():
     processor.do_reduce_labels = False
 
     spin_dm = SPINDataModule(
-        annotation_dir=train_annotation_dir,
-        image_dir=train_image_dir,
+        annotation_dir=dataset_annotation_dir,
+        image_dir=dataset_image_dir,
         processor=processor,
         batch_size=args.batch_size,
         crop_size=args.crop_size,
