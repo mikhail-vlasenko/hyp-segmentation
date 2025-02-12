@@ -140,6 +140,7 @@ class SPINDataModule(L.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
+            persistent_workers=True,
         )
 
     def val_dataloader(self):
@@ -148,6 +149,7 @@ class SPINDataModule(L.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
+            persistent_workers=True,
         )
 
 
@@ -232,6 +234,8 @@ def parse_args():
     parser.add_argument("--crop_size", type=float, nargs=2, default=(0.8, 0.8), help="Crop size as a fraction of image dimensions")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--num_workers", type=int, default=4, help="Number of workers for data loading")
+    parser.add_argument("--accumulate_grad_batches", type=int, default=1,
+                        help="Accumulate gradient batches before updating weights")
     return parser.parse_args()
 
 
@@ -243,7 +247,6 @@ def main():
     NUM_CLASSES = 204  # 203 classes + 1 background
     L.seed_everything(args.seed, workers=True)
 
-    # Processor
     processor = SegformerImageProcessor.from_pretrained(args.model_name)
     processor.do_reduce_labels = False
 
@@ -254,7 +257,6 @@ def main():
         batch_size=args.batch_size,
         crop_size=args.crop_size,
         num_workers=args.num_workers,
-
     )
 
     segformer_module = SegformerLightningModule(
@@ -265,14 +267,17 @@ def main():
 
     wandb_logger = WandbLogger(
         project="hyperbolic-segmentation",
-        log_model=True  # Logs checkpoints
+        log_model=True
     )
+
+    wandb_logger.log_hyperparams(vars(args))
 
     trainer = L.Trainer(
         logger=wandb_logger,
         max_epochs=args.num_epochs,
         accelerator="auto",
         devices="auto",
+        accumulate_grad_batches=args.accumulate_grad_batches,
     )
 
     trainer.fit(segformer_module, spin_dm)
