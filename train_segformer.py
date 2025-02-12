@@ -134,8 +134,8 @@ val_dataset = SPINSegmentationDataset(
     processor
 )
 
-train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 
 # Training setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

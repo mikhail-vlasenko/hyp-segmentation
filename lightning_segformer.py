@@ -1,4 +1,5 @@
 import os
+import argparse
 import torch
 import numpy as np
 import lightning as L
@@ -8,34 +9,13 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import v2 as transforms
 import torchvision.transforms.functional as TF
 
-# Hugging Face
 from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
 
-# Torchmetrics
 from torchmetrics.classification import MulticlassJaccardIndex
 
-# Local imports
 from spin import SPIN
 from segformer_head import HyperbolicSegformerDecodeHead
 from PIL import Image
-
-# ------------------------
-# Configuration
-# ------------------------
-MODEL_NAME = "nvidia/segformer-b0-finetuned-ade-512-512"
-TRAIN_ANNOTATION_DIR = "/home/misha/data/PartImageNet/annotations"  # Replace with your path
-TRAIN_IMAGE_DIR = "/home/misha/data/PartImageNet/images"  # Replace with your path
-NUM_CLASSES = 204  # 203 classes + 1 background
-BATCH_SIZE = 8
-NUM_EPOCHS = 10
-LEARNING_RATE = 2e-4
-CROP_SIZE = (0.8, 0.8)
-SEED = 42
-
-# ------------------------
-# Utility
-# ------------------------
-L.seed_everything(SEED, workers=True)
 
 
 class RandomCropAndFlip:
@@ -127,6 +107,7 @@ class SPINDataModule(L.LightningDataModule):
         processor: SegformerImageProcessor,
         batch_size: int = 8,
         crop_size=(0.8, 0.8),
+        num_workers=4,
     ):
         super().__init__()
         self.annotation_dir = annotation_dir
@@ -134,6 +115,7 @@ class SPINDataModule(L.LightningDataModule):
         self.processor = processor
         self.batch_size = batch_size
         self.crop_size = crop_size
+        self.num_workers = num_workers
 
     def setup(self, stage=None):
         # Create train/val datasets
@@ -157,7 +139,7 @@ class SPINDataModule(L.LightningDataModule):
             self.train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
-            num_workers=4,
+            num_workers=self.num_workers,
         )
 
     def val_dataloader(self):
@@ -165,16 +147,16 @@ class SPINDataModule(L.LightningDataModule):
             self.val_dataset,
             batch_size=self.batch_size,
             shuffle=False,
-            num_workers=4,
+            num_workers=self.num_workers,
         )
 
 
 class SegformerLightningModule(L.LightningModule):
     def __init__(
         self,
-        model_name: str = MODEL_NAME,
-        num_labels: int = NUM_CLASSES,
-        lr: float = LEARNING_RATE,
+        model_name: str,
+        num_labels: int,
+        lr: float,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -240,34 +222,47 @@ class SegformerLightningModule(L.LightningModule):
         return optimizer
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train SegFormer for Semantic Segmentation")
+    parser.add_argument("--dataset_dir", type=str, required=True, help="Path to the dataset directory")
+    parser.add_argument("--model_name", type=str, default="nvidia/segformer-b0-finetuned-ade-512-512", help="Name of the pre-trained model")
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
+    parser.add_argument("--num_epochs", type=int, default=10, help="Number of epochs")
+    parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate")
+    parser.add_argument("--crop_size", type=float, nargs=2, default=(0.8, 0.8), help="Crop size as a fraction of image dimensions")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--num_workers", type=int, default=4, help="Number of workers for data loading")
+    return parser.parse_args()
+
+
 def main():
-    # ------------------------
-    # Setup
-    # ------------------------
+    args = parse_args()
+    train_annotation_dir = os.path.join(args.train_dir, "annotations")
+    train_image_dir = os.path.join(args.train_dir, "images")
+
+    NUM_CLASSES = 204  # 203 classes + 1 background
+    L.seed_everything(args.seed, workers=True)
+
     # Processor
-    processor = SegformerImageProcessor.from_pretrained(MODEL_NAME)
-    # Do not reduce label indices by 1 (background=0)
+    processor = SegformerImageProcessor.from_pretrained(args.model_name)
     processor.do_reduce_labels = False
 
-    # DataModule
     spin_dm = SPINDataModule(
-        annotation_dir=TRAIN_ANNOTATION_DIR,
-        image_dir=TRAIN_IMAGE_DIR,
+        annotation_dir=train_annotation_dir,
+        image_dir=train_image_dir,
         processor=processor,
-        batch_size=BATCH_SIZE,
-        crop_size=CROP_SIZE,
+        batch_size=args.batch_size,
+        crop_size=args.crop_size,
+        num_workers=args.num_workers,
+
     )
 
-    # LightningModule
     segformer_module = SegformerLightningModule(
-        model_name=MODEL_NAME,
+        model_name=args.model_name,
         num_labels=NUM_CLASSES,
-        lr=LEARNING_RATE,
+        lr=args.learning_rate,
     )
 
-    # ------------------------
-    # Logger / Trainer
-    # ------------------------
     wandb_logger = WandbLogger(
         project="hyperbolic-segmentation",
         log_model=True  # Logs checkpoints
@@ -275,27 +270,18 @@ def main():
 
     trainer = L.Trainer(
         logger=wandb_logger,
-        max_epochs=NUM_EPOCHS,
-        accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        devices=1 if torch.cuda.is_available() else None,
-        # You can add more trainer flags (precision, callbacks, etc.)
+        max_epochs=args.num_epochs,
+        accelerator="auto",
+        devices="auto",
     )
 
-    # ------------------------
-    # Training
-    # ------------------------
     trainer.fit(segformer_module, spin_dm)
 
-    # ------------------------
-    # Save final model + processor
-    # ------------------------
     save_dir = "segformer-finetuned-spin"
     os.makedirs(save_dir, exist_ok=True)
 
     segformer_module.model.save_pretrained(save_dir)
     processor.save_pretrained(save_dir)
-
-    # Finish WandB run
     wandb_logger.experiment.finish()
 
 
