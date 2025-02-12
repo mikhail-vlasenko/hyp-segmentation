@@ -8,3 +8,5 @@ tqdm~=4.66.5
 git+https://github.com/geoopt/geoopt.git@v0.5.1
 wandb~=0.19.5
 torchvision~=0.20.1
+spin-dataset-api==1.0.0
+lightning==2.5.0
