@@ -46,13 +46,15 @@ class RandomCropAndFlip:
 
 
 class SPINSegmentationDataset(Dataset):
-    def __init__(self, annotation_dir, image_dir, split, processor, crop_size=None):
+    def __init__(self, annotation_dir, image_dir, split, granularity, background_class, processor, crop_size=None):
         self.spin_api = SPIN(
             annotation_dir=annotation_dir,
             image_dir=image_dir,
             split=split,
             download=False,
         )
+        self.granularity = granularity
+        self.background_class = background_class
         self.processor = processor
         self.image_ids = self.spin_api.getImgIds()
         self.split = split
@@ -73,7 +75,9 @@ class SPINSegmentationDataset(Dataset):
 
         # Generate segmentation map
         segmentation_map = self.spin_api.rasterize_coco_segmentations(
-            self.spin_api.subparts, image_id, background_class=0
+            self.spin_api.__getattribute__(self.granularity + "s"),
+            image_id,
+            background_class=self.background_class
         )
         segmentation_map = Image.fromarray(segmentation_map.astype("uint8"))
 
@@ -104,6 +108,8 @@ class SPINDataModule(L.LightningDataModule):
         self,
         annotation_dir: str,
         image_dir: str,
+        granularity: str,
+        background_class: int,
         processor: SegformerImageProcessor,
         batch_size: int = 8,
         crop_size=(0.8, 0.8),
@@ -112,6 +118,8 @@ class SPINDataModule(L.LightningDataModule):
         super().__init__()
         self.annotation_dir = annotation_dir
         self.image_dir = image_dir
+        self.granularity = granularity
+        self.background_class = background_class
         self.processor = processor
         self.batch_size = batch_size
         self.crop_size = crop_size
@@ -125,12 +133,16 @@ class SPINDataModule(L.LightningDataModule):
                 self.image_dir,
                 split="train",
                 processor=self.processor,
+                granularity=self.granularity,
+                background_class=self.background_class,
                 crop_size=self.crop_size,
             )
             self.val_dataset = SPINSegmentationDataset(
                 self.annotation_dir,
                 self.image_dir,
                 split="val",
+                granularity=self.granularity,
+                background_class=self.background_class,
                 processor=self.processor,
             )
 
@@ -159,6 +171,7 @@ class SegformerLightningModule(L.LightningModule):
         model_name: str,
         num_labels: int,
         lr: float,
+        background_class=0,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -177,7 +190,7 @@ class SegformerLightningModule(L.LightningModule):
         # Metric: mIoU
         self.jaccard = MulticlassJaccardIndex(
             num_classes=num_labels,
-            ignore_index=0,
+            ignore_index=background_class,
         )
         self.lr = lr
 
@@ -228,6 +241,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train SegFormer for Semantic Segmentation")
     parser.add_argument("--dataset_dir", type=str, required=True, help="Path to the dataset directory")
     parser.add_argument("--model_name", type=str, default="nvidia/segformer-b0-finetuned-ade-512-512", help="Name of the pre-trained model")
+    parser.add_argument("--granularity", type=str, default="subpart", choices=["whole", "part", "subpart"], required=True,
+                        help="Level of segmentation granularity: whole, part, or subpart")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
     parser.add_argument("--num_epochs", type=int, default=10, help="Number of epochs")
     parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate")
@@ -244,7 +259,8 @@ def main():
     dataset_annotation_dir = os.path.join(args.dataset_dir, "annotations")
     dataset_image_dir = os.path.join(args.dataset_dir, "images")
 
-    NUM_CLASSES = 204  # 203 classes + 1 background
+    background_class = {"whole": 158, "part": 40, "subpart": 0}[args.granularity]  # i did not come up with this
+    num_labels = {"whole": 158, "part": 40, "subpart": 203}[args.granularity] + 1  # classes + 1 background
     L.seed_everything(args.seed, workers=True)
 
     processor = SegformerImageProcessor.from_pretrained(args.model_name)
@@ -253,6 +269,8 @@ def main():
     spin_dm = SPINDataModule(
         annotation_dir=dataset_annotation_dir,
         image_dir=dataset_image_dir,
+        granularity=args.granularity,
+        background_class=background_class,
         processor=processor,
         batch_size=args.batch_size,
         crop_size=args.crop_size,
@@ -261,13 +279,14 @@ def main():
 
     segformer_module = SegformerLightningModule(
         model_name=args.model_name,
-        num_labels=NUM_CLASSES,
+        num_labels=num_labels,
         lr=args.learning_rate,
+        background_class=background_class,
     )
 
     wandb_logger = WandbLogger(
         project="hyperbolic-segmentation",
-        log_model=True
+        log_model=True,
     )
 
     wandb_logger.log_hyperparams(vars(args))

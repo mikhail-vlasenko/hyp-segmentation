@@ -21,6 +21,7 @@ echo "Files copied to $TMPDIR"
 
 python3 lightning_segformer.py \
   --dataset_dir $TMPDIR/PartImageNet/ \
+  --granularity subpart \
   --learning_rate 0.0001 \
   --num_epochs 50 \
   --batch_size 8 \
