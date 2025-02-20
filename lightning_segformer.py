@@ -1,9 +1,12 @@
+import copy
 import os
 import argparse
 import torch
 import numpy as np
 import lightning as L
 from lightning.pytorch.loggers import WandbLogger
+from torch import nn
+from torch.nn import CrossEntropyLoss
 
 from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import v2 as transforms
@@ -18,6 +21,12 @@ from segformer_head import HyperbolicSegformerDecodeHead
 from PIL import Image
 
 
+def background_class_for_granularity(granularity):
+    return {"whole": 158, "part": 40, "subpart": 0}[granularity]
+
+def num_labels_for_granularity(granularity):
+    return {"whole": 159, "part": 41, "subpart": 204}[granularity]  # classes + 1 background
+
 class RandomCropAndFlip:
     """
     A custom transform that applies a random crop and random horizontal flip
@@ -28,6 +37,9 @@ class RandomCropAndFlip:
         self.crop_size = crop_size
 
     def __call__(self, image, segmentation_map):
+        """
+        Can take multiple segmentation maps as input. Transforms them all in the same way.
+        """
         # image.size => (width, height)
         w, h = image.size
         crop_w, crop_h = int(self.crop_size[0] * w), int(self.crop_size[1] * h)
@@ -35,18 +47,24 @@ class RandomCropAndFlip:
         # Random crop
         i, j, h_, w_ = transforms.RandomCrop.get_params(image, (crop_h, crop_w))
         image = TF.crop(image, i, j, h_, w_)
-        segmentation_map = TF.crop(segmentation_map, i, j, h_, w_)
+        if isinstance(segmentation_map, list):
+            segmentation_map = [TF.crop(s, i, j, h_, w_) for s in segmentation_map]
+        else:
+            segmentation_map = TF.crop(segmentation_map, i, j, h_, w_)
 
         # Random horizontal flip
         if np.random.random() > 0.5:
             image = TF.hflip(image)
-            segmentation_map = TF.hflip(segmentation_map)
+            if isinstance(segmentation_map, list):
+                segmentation_map = [TF.hflip(s) for s in segmentation_map]
+            else:
+                segmentation_map = TF.hflip(segmentation_map)
 
         return image, segmentation_map
 
 
 class SPINSegmentationDataset(Dataset):
-    def __init__(self, annotation_dir, image_dir, split, granularity, background_class, processor, crop_size=None):
+    def __init__(self, annotation_dir, image_dir, split, granularity, processor, crop_size=None):
         self.spin_api = SPIN(
             annotation_dir=annotation_dir,
             image_dir=image_dir,
@@ -54,7 +72,6 @@ class SPINSegmentationDataset(Dataset):
             download=False,
         )
         self.granularity = granularity
-        self.background_class = background_class
         self.processor = processor
         self.image_ids = self.spin_api.getImgIds()
         self.split = split
@@ -67,30 +84,65 @@ class SPINSegmentationDataset(Dataset):
     def __len__(self):
         return len(self.image_ids)
 
+    def get_segmentation_map(self, image_id, granularity):
+        segmentation_map = self.spin_api.rasterize_coco_segmentations(
+            self.spin_api.__getattribute__(granularity + "s"),
+            image_id,
+            background_class=background_class_for_granularity(granularity),
+        )
+        segmentation_map = Image.fromarray(segmentation_map.astype("uint8"))
+        return segmentation_map
+
     def __getitem__(self, idx):
+        # todo: infer the train signal from one segmentation map rather than constructing 3 of them
+        #   requires the object class to be general (quadruped instead of dog)
         image_id = self.image_ids[idx]
 
         # Load image
         image = self.spin_api.get_image(image_id)
 
-        # Generate segmentation map
-        segmentation_map = self.spin_api.rasterize_coco_segmentations(
-            self.spin_api.__getattribute__(self.granularity + "s"),
-            image_id,
-            background_class=self.background_class
-        )
-        segmentation_map = Image.fromarray(segmentation_map.astype("uint8"))
+        if self.granularity == "all":
+            # Load all segmentation maps
+            segmentation_map_whole = self.get_segmentation_map(image_id, "whole")
+            segmentation_map_part = self.get_segmentation_map(image_id, "part")
+            segmentation_map_subpart = self.get_segmentation_map(image_id, "subpart")
+        else:
+            segmentation_map = self.get_segmentation_map(image_id, self.granularity)
 
         # Apply custom transforms (random crop/flip) if training
         if self.transform is not None:
-            image, segmentation_map = self.transform(image, segmentation_map)
+            if self.granularity == "all":
+                image, [segmentation_map_whole, segmentation_map_part, segmentation_map_subpart] = self.transform(
+                    image, [segmentation_map_whole, segmentation_map_part, segmentation_map_subpart]
+                )
+            else:
+                image, segmentation_map = self.transform(image, segmentation_map)
 
-        # Process for SegFormer
-        inputs = self.processor(
-            images=image,
-            segmentation_maps=segmentation_map,
-            return_tensors="pt",
-        )
+        if self.granularity == "all":
+            inputs = {}
+            wholes = self.processor(
+                images=image,
+                segmentation_maps=segmentation_map_whole,
+                return_tensors="pt",
+            )
+            inputs["pixel_values"] = wholes["pixel_values"]
+            inputs["labels_whole"] = wholes["labels"]
+            inputs["labels_part"] = self.processor(
+                images=image,
+                segmentation_maps=segmentation_map_part,
+                return_tensors="pt",
+            )["labels"]
+            inputs["labels_subpart"] = self.processor(
+                images=image,
+                segmentation_maps=segmentation_map_subpart,
+                return_tensors="pt",
+            )["labels"]
+        else:
+            inputs = self.processor(
+                images=image,
+                segmentation_maps=segmentation_map,
+                return_tensors="pt",
+            )
 
         # Remove batch dimension (since processor adds it)
         inputs = {k: v.squeeze() for k, v in inputs.items()}
@@ -109,7 +161,6 @@ class SPINDataModule(L.LightningDataModule):
         annotation_dir: str,
         image_dir: str,
         granularity: str,
-        background_class: int,
         processor: SegformerImageProcessor,
         batch_size: int = 8,
         crop_size=(0.8, 0.8),
@@ -119,7 +170,6 @@ class SPINDataModule(L.LightningDataModule):
         self.annotation_dir = annotation_dir
         self.image_dir = image_dir
         self.granularity = granularity
-        self.background_class = background_class
         self.processor = processor
         self.batch_size = batch_size
         self.crop_size = crop_size
@@ -134,7 +184,6 @@ class SPINDataModule(L.LightningDataModule):
                 split="train",
                 processor=self.processor,
                 granularity=self.granularity,
-                background_class=self.background_class,
                 crop_size=self.crop_size,
             )
             self.val_dataset = SPINSegmentationDataset(
@@ -142,7 +191,6 @@ class SPINDataModule(L.LightningDataModule):
                 self.image_dir,
                 split="val",
                 granularity=self.granularity,
-                background_class=self.background_class,
                 processor=self.processor,
             )
 
@@ -169,68 +217,124 @@ class SegformerLightningModule(L.LightningModule):
     def __init__(
         self,
         model_name: str,
-        num_labels: int,
         lr: float,
-        background_class=0,
     ):
         super().__init__()
+        # Save all hyperparameters so they can be later accessed via self.hparams
         self.save_hyperparameters()
 
-        # Processor is separate, used for dataset collations
-        self.model = SegformerForSemanticSegmentation.from_pretrained(
-            model_name,
-            num_labels=num_labels,
-            ignore_mismatched_sizes=True,
+        self.model = SegformerForSemanticSegmentation.from_pretrained(model_name)
+        self.backbone = self.model.segformer
+        original_decode_head = self.model.decode_head
+
+        # Create three separate decode heads by reusing the original one as a template.
+        self.decode_head_whole = HyperbolicSegformerDecodeHead.from_segformer_decode_head(
+            copy.deepcopy(original_decode_head), num_labels_for_granularity("whole"), None, hyperbolic=False
         )
-        # Replace the decode head with the custom hyperbolic head
-        self.model.decode_head = HyperbolicSegformerDecodeHead.from_segformer_decode_head(
-            self.model.decode_head, num_labels, None, hyperbolic=False
+        self.decode_head_part = HyperbolicSegformerDecodeHead.from_segformer_decode_head(
+            copy.deepcopy(original_decode_head), num_labels_for_granularity("part"), None, hyperbolic=False
+        )
+        self.decode_head_subpart = HyperbolicSegformerDecodeHead.from_segformer_decode_head(
+            copy.deepcopy(original_decode_head), num_labels_for_granularity("subpart"), None, hyperbolic=False
         )
 
-        # Metric: mIoU
-        self.jaccard = MulticlassJaccardIndex(
-            num_classes=num_labels,
-            ignore_index=background_class,
+        self.jaccard_whole = MulticlassJaccardIndex(
+            num_classes=num_labels_for_granularity("whole"), ignore_index=background_class_for_granularity("whole")
+        )
+        self.jaccard_part = MulticlassJaccardIndex(
+            num_classes=num_labels_for_granularity("part"), ignore_index=background_class_for_granularity("part")
+        )
+        self.jaccard_subpart = MulticlassJaccardIndex(
+            num_classes=num_labels_for_granularity("subpart"), ignore_index=background_class_for_granularity("subpart")
         )
         self.lr = lr
 
-    def forward(self, pixel_values, labels=None):
-        # Standard forward for huggingface model
-        return self.model(pixel_values=pixel_values, labels=labels)
+    def logits_to_loss(self, logits, labels, ignore_index, return_preds=False):
+        # upsample logits to the images' original size
+        upsampled_logits = nn.functional.interpolate(
+            logits, size=labels.shape[-2:], mode="bilinear", align_corners=False
+        )
+        loss_fct = CrossEntropyLoss(ignore_index=ignore_index)
+        loss = loss_fct(upsampled_logits, labels)
+        if return_preds:
+            preds = torch.argmax(upsampled_logits, dim=1)
+            return {
+                "loss": loss,
+                "preds": preds,
+            }
+        return loss
+
+    def forward(self, pixel_values):
+        outputs = self.backbone(
+            pixel_values,
+            output_attentions=None,
+            output_hidden_states=True,  # we need the intermediate hidden states
+            return_dict=None,
+        )
+        encoder_hidden_states = outputs[1]
+        # Compute logits from each decoding head using the same backbone features
+        logits_whole = self.decode_head_whole(encoder_hidden_states)
+        logits_part = self.decode_head_part(encoder_hidden_states)
+        logits_subpart = self.decode_head_subpart(encoder_hidden_states)
+        return {
+            "logits_whole": logits_whole,
+            "logits_part": logits_part,
+            "logits_subpart": logits_subpart,
+        }
 
     def training_step(self, batch, batch_idx):
         pixel_values = batch["pixel_values"]
-        labels = batch["labels"]
-        outputs = self.forward(pixel_values, labels)
-        loss = outputs.loss
+        labels_whole = batch["labels_whole"]
+        labels_part = batch["labels_part"]
+        labels_subpart = batch["labels_subpart"]
 
-        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
-        return loss
+        outputs = self.forward(pixel_values)
+        logits_whole = outputs["logits_whole"]
+        logits_part = outputs["logits_part"]
+        logits_subpart = outputs["logits_subpart"]
+
+        loss_whole = self.logits_to_loss(logits_whole, labels_whole, background_class_for_granularity("whole"))
+        loss_part = self.logits_to_loss(logits_part, labels_part, background_class_for_granularity("part"))
+        loss_subpart = self.logits_to_loss(logits_subpart, labels_subpart, background_class_for_granularity("subpart"))
+        total_loss = loss_whole + loss_part + loss_subpart  # add coefs?
+
+        self.log("train_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True)
+        return total_loss
 
     def validation_step(self, batch, batch_idx):
         pixel_values = batch["pixel_values"]
-        labels = batch["labels"]
-        outputs = self.forward(pixel_values, labels=labels)
+        labels_whole = batch["labels_whole"]
+        labels_part = batch["labels_part"]
+        labels_subpart = batch["labels_subpart"]
 
-        val_loss = outputs.loss
-        # Upsample logits to original size
-        logits = outputs.logits
-        upsampled_logits = torch.nn.functional.interpolate(
-            logits, size=labels.shape[-2:], mode="bilinear", align_corners=False
-        )
-        preds = torch.argmax(upsampled_logits, dim=1)
+        outputs = self.forward(pixel_values)
+        logits_whole = outputs["logits_whole"]
+        logits_part = outputs["logits_part"]
+        logits_subpart = outputs["logits_subpart"]
 
-        # Update Jaccard (mIoU) metric
-        self.jaccard.update(preds, labels)
+        result_whole = self.logits_to_loss(logits_whole, labels_whole, background_class_for_granularity("whole"), return_preds=True)
+        result_part = self.logits_to_loss(logits_part, labels_part, background_class_for_granularity("part"), return_preds=True)
+        result_subpart = self.logits_to_loss(logits_subpart, labels_subpart, background_class_for_granularity("subpart"), return_preds=True)
+        val_loss = result_whole["loss"] + result_part["loss"] + result_subpart["loss"]
+
+        # Update metrics for each granularity
+        self.jaccard_whole.update(result_whole["preds"], labels_whole)
+        self.jaccard_part.update(result_part["preds"], labels_part)
+        self.jaccard_subpart.update(result_subpart["preds"], labels_subpart)
 
         self.log("val_loss", val_loss, on_step=False, on_epoch=True, prog_bar=True)
         return val_loss
 
     def on_validation_epoch_end(self):
-        miou = self.jaccard.compute()
-        self.log("val_mIoU", miou, prog_bar=True)
-        # Reset for next epoch
-        self.jaccard.reset()
+        miou_whole = self.jaccard_whole.compute()
+        miou_part = self.jaccard_part.compute()
+        miou_subpart = self.jaccard_subpart.compute()
+        self.log("val_mIoU_whole", miou_whole, prog_bar=True)
+        self.log("val_mIoU_part", miou_part, prog_bar=True)
+        self.log("val_mIoU_subpart", miou_subpart, prog_bar=True)
+        self.jaccard_whole.reset()
+        self.jaccard_part.reset()
+        self.jaccard_subpart.reset()
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
@@ -241,7 +345,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train SegFormer for Semantic Segmentation")
     parser.add_argument("--dataset_dir", type=str, required=True, help="Path to the dataset directory")
     parser.add_argument("--model_name", type=str, default="nvidia/segformer-b0-finetuned-ade-512-512", help="Name of the pre-trained model")
-    parser.add_argument("--granularity", type=str, default="subpart", choices=["whole", "part", "subpart"], required=True,
+    parser.add_argument("--granularity", type=str, default="subpart", choices=["whole", "part", "subpart", "all"], required=True,
                         help="Level of segmentation granularity: whole, part, or subpart")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
     parser.add_argument("--num_epochs", type=int, default=10, help="Number of epochs")
@@ -259,8 +363,6 @@ def main():
     dataset_annotation_dir = os.path.join(args.dataset_dir, "annotations")
     dataset_image_dir = os.path.join(args.dataset_dir, "images")
 
-    background_class = {"whole": 158, "part": 40, "subpart": 0}[args.granularity]  # i did not come up with this
-    num_labels = {"whole": 158, "part": 40, "subpart": 203}[args.granularity] + 1  # classes + 1 background
     L.seed_everything(args.seed, workers=True)
 
     processor = SegformerImageProcessor.from_pretrained(args.model_name)
@@ -270,7 +372,6 @@ def main():
         annotation_dir=dataset_annotation_dir,
         image_dir=dataset_image_dir,
         granularity=args.granularity,
-        background_class=background_class,
         processor=processor,
         batch_size=args.batch_size,
         crop_size=args.crop_size,
@@ -279,9 +380,7 @@ def main():
 
     segformer_module = SegformerLightningModule(
         model_name=args.model_name,
-        num_labels=num_labels,
         lr=args.learning_rate,
-        background_class=background_class,
     )
 
     wandb_logger = WandbLogger(
