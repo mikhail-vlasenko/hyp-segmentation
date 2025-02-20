@@ -97,51 +97,33 @@ class SPINSegmentationDataset(Dataset):
         # todo: infer the train signal from one segmentation map rather than constructing 3 of them
         #   requires the object class to be general (quadruped instead of dog)
         image_id = self.image_ids[idx]
-
-        # Load image
         image = self.spin_api.get_image(image_id)
 
         if self.granularity == "all":
-            # Load all segmentation maps
-            segmentation_map_whole = self.get_segmentation_map(image_id, "whole")
-            segmentation_map_part = self.get_segmentation_map(image_id, "part")
-            segmentation_map_subpart = self.get_segmentation_map(image_id, "subpart")
+            segmentation_maps = [self.get_segmentation_map(image_id, mode) for mode in ("whole", "part", "subpart")]
         else:
-            segmentation_map = self.get_segmentation_map(image_id, self.granularity)
+            segmentation_maps = self.get_segmentation_map(image_id, self.granularity)
 
-        # Apply custom transforms (random crop/flip) if training
-        if self.transform is not None:
-            if self.granularity == "all":
-                image, [segmentation_map_whole, segmentation_map_part, segmentation_map_subpart] = self.transform(
-                    image, [segmentation_map_whole, segmentation_map_part, segmentation_map_subpart]
-                )
-            else:
-                image, segmentation_map = self.transform(image, segmentation_map)
+        if self.transform:
+            image, segmentation_maps = self.transform(image, segmentation_maps)
 
         if self.granularity == "all":
-            inputs = {}
-            wholes = self.processor(
-                images=image,
-                segmentation_maps=segmentation_map_whole,
-                return_tensors="pt",
+            proc_whole = self.processor(
+                images=image, segmentation_maps=segmentation_maps[0], return_tensors="pt"
             )
-            inputs["pixel_values"] = wholes["pixel_values"]
-            inputs["labels_whole"] = wholes["labels"]
-            inputs["labels_part"] = self.processor(
-                images=image,
-                segmentation_maps=segmentation_map_part,
-                return_tensors="pt",
-            )["labels"]
-            inputs["labels_subpart"] = self.processor(
-                images=image,
-                segmentation_maps=segmentation_map_subpart,
-                return_tensors="pt",
-            )["labels"]
+            inputs = {
+                "pixel_values": proc_whole["pixel_values"],
+                "labels_whole": proc_whole["labels"],
+                "labels_part": self.processor(
+                    images=image, segmentation_maps=segmentation_maps[1], return_tensors="pt"
+                )["labels"],
+                "labels_subpart": self.processor(
+                    images=image, segmentation_maps=segmentation_maps[2], return_tensors="pt"
+                )["labels"],
+            }
         else:
             inputs = self.processor(
-                images=image,
-                segmentation_maps=segmentation_map,
-                return_tensors="pt",
+                images=image, segmentation_maps=segmentation_maps, return_tensors="pt"
             )
 
         # Remove batch dimension (since processor adds it)
@@ -283,58 +265,38 @@ class SegformerLightningModule(L.LightningModule):
         }
 
     def training_step(self, batch, batch_idx):
-        pixel_values = batch["pixel_values"]
-        labels_whole = batch["labels_whole"]
-        labels_part = batch["labels_part"]
-        labels_subpart = batch["labels_subpart"]
+        outputs = self.forward(batch["pixel_values"])
 
-        outputs = self.forward(pixel_values)
-        logits_whole = outputs["logits_whole"]
-        logits_part = outputs["logits_part"]
-        logits_subpart = outputs["logits_subpart"]
+        loss = 0
+        for granularity in ["whole", "part", "subpart"]:
+            logits = outputs[f"logits_{granularity}"]
+            labels = batch[f"labels_{granularity}"]
+            loss += self.logits_to_loss(logits, labels, background_class_for_granularity(granularity))
 
-        loss_whole = self.logits_to_loss(logits_whole, labels_whole, background_class_for_granularity("whole"))
-        loss_part = self.logits_to_loss(logits_part, labels_part, background_class_for_granularity("part"))
-        loss_subpart = self.logits_to_loss(logits_subpart, labels_subpart, background_class_for_granularity("subpart"))
-        total_loss = loss_whole + loss_part + loss_subpart  # add coefs?
-
-        self.log("train_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True)
-        return total_loss
+        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        return loss
 
     def validation_step(self, batch, batch_idx):
-        pixel_values = batch["pixel_values"]
-        labels_whole = batch["labels_whole"]
-        labels_part = batch["labels_part"]
-        labels_subpart = batch["labels_subpart"]
+        outputs = self.forward(batch["pixel_values"])
 
-        outputs = self.forward(pixel_values)
-        logits_whole = outputs["logits_whole"]
-        logits_part = outputs["logits_part"]
-        logits_subpart = outputs["logits_subpart"]
-
-        result_whole = self.logits_to_loss(logits_whole, labels_whole, background_class_for_granularity("whole"), return_preds=True)
-        result_part = self.logits_to_loss(logits_part, labels_part, background_class_for_granularity("part"), return_preds=True)
-        result_subpart = self.logits_to_loss(logits_subpart, labels_subpart, background_class_for_granularity("subpart"), return_preds=True)
-        val_loss = result_whole["loss"] + result_part["loss"] + result_subpart["loss"]
-
-        # Update metrics for each granularity
-        self.jaccard_whole.update(result_whole["preds"], labels_whole)
-        self.jaccard_part.update(result_part["preds"], labels_part)
-        self.jaccard_subpart.update(result_subpart["preds"], labels_subpart)
+        val_loss = 0
+        for granularity, metric in zip(["whole", "part", "subpart"],
+                                       [self.jaccard_whole, self.jaccard_part, self.jaccard_subpart]):
+            logits = outputs[f"logits_{granularity}"]
+            labels = batch[f"labels_{granularity}"]
+            result = self.logits_to_loss(logits, labels, background_class_for_granularity(granularity), return_preds=True)
+            val_loss += result["loss"]
+            metric.update(result["preds"], labels)
 
         self.log("val_loss", val_loss, on_step=False, on_epoch=True, prog_bar=True)
         return val_loss
 
     def on_validation_epoch_end(self):
-        miou_whole = self.jaccard_whole.compute()
-        miou_part = self.jaccard_part.compute()
-        miou_subpart = self.jaccard_subpart.compute()
-        self.log("val_mIoU_whole", miou_whole, prog_bar=True)
-        self.log("val_mIoU_part", miou_part, prog_bar=True)
-        self.log("val_mIoU_subpart", miou_subpart, prog_bar=True)
-        self.jaccard_whole.reset()
-        self.jaccard_part.reset()
-        self.jaccard_subpart.reset()
+        for granularity, metric in zip(["whole", "part", "subpart"],
+                                       [self.jaccard_whole, self.jaccard_part, self.jaccard_subpart]):
+            miou = metric.compute()
+            self.log(f"val_mIoU_{granularity}", miou, prog_bar=True)
+            metric.reset()
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
