@@ -186,6 +186,7 @@ class SegformerLightningModule(L.LightningModule):
         self.model.decode_head = HyperbolicSegformerDecodeHead.from_segformer_decode_head(
             self.model.decode_head, num_labels, None, hyperbolic=False
         )
+        self.model.config.semantic_loss_ignore_index = background_class
 
         # Metric: mIoU
         self.jaccard = MulticlassJaccardIndex(
