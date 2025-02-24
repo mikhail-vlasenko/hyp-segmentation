@@ -36,9 +36,9 @@ class RandomCropAndFlip:
     def __init__(self, crop_size):
         self.crop_size = crop_size
 
-    def __call__(self, image, segmentation_map):
+    def __call__(self, image, segmentation_maps):
         """
-        Can take multiple segmentation maps as input. Transforms them all in the same way.
+        Takes multiple segmentation maps as input. Transforms them all in the same way.
         """
         # image.size => (width, height)
         w, h = image.size
@@ -47,31 +47,25 @@ class RandomCropAndFlip:
         # Random crop
         i, j, h_, w_ = transforms.RandomCrop.get_params(image, (crop_h, crop_w))
         image = TF.crop(image, i, j, h_, w_)
-        if isinstance(segmentation_map, list):
-            segmentation_map = [TF.crop(s, i, j, h_, w_) for s in segmentation_map]
-        else:
-            segmentation_map = TF.crop(segmentation_map, i, j, h_, w_)
+        segmentation_maps = [TF.crop(s, i, j, h_, w_) for s in segmentation_maps]
 
         # Random horizontal flip
         if np.random.random() > 0.5:
             image = TF.hflip(image)
-            if isinstance(segmentation_map, list):
-                segmentation_map = [TF.hflip(s) for s in segmentation_map]
-            else:
-                segmentation_map = TF.hflip(segmentation_map)
+            segmentation_maps = [TF.hflip(s) for s in segmentation_maps]
 
-        return image, segmentation_map
+        return image, segmentation_maps
 
 
 class SPINSegmentationDataset(Dataset):
-    def __init__(self, annotation_dir, image_dir, split, granularity, processor, crop_size=None):
+    def __init__(self, annotation_dir, image_dir, split, granularities, processor, crop_size=None):
         self.spin_api = SPIN(
             annotation_dir=annotation_dir,
             image_dir=image_dir,
             split=split,
             download=False,
         )
-        self.granularity = granularity
+        self.granularities = granularities
         self.processor = processor
         self.image_ids = self.spin_api.getImgIds()
         self.split = split
@@ -99,32 +93,20 @@ class SPINSegmentationDataset(Dataset):
         image_id = self.image_ids[idx]
         image = self.spin_api.get_image(image_id)
 
-        if self.granularity == "all":
-            segmentation_maps = [self.get_segmentation_map(image_id, mode) for mode in ("whole", "part", "subpart")]
-        else:
-            segmentation_maps = self.get_segmentation_map(image_id, self.granularity)
+        segmentation_maps = [
+            self.get_segmentation_map(image_id, granularity) for granularity in self.granularities
+        ]
 
         if self.transform:
             image, segmentation_maps = self.transform(image, segmentation_maps)
 
-        if self.granularity == "all":
-            proc_whole = self.processor(
-                images=image, segmentation_maps=segmentation_maps[0], return_tensors="pt"
-            )
-            inputs = {
-                "pixel_values": proc_whole["pixel_values"],
-                "labels_whole": proc_whole["labels"],
-                "labels_part": self.processor(
-                    images=image, segmentation_maps=segmentation_maps[1], return_tensors="pt"
-                )["labels"],
-                "labels_subpart": self.processor(
-                    images=image, segmentation_maps=segmentation_maps[2], return_tensors="pt"
-                )["labels"],
-            }
-        else:
-            inputs = self.processor(
-                images=image, segmentation_maps=segmentation_maps, return_tensors="pt"
-            )
+        inputs = {}
+        for granularity, segmentation_map in zip(self.granularities, segmentation_maps):
+            res = self.processor(
+                images=image, segmentation_maps=segmentation_map, return_tensors="pt"
+            )  # some computational overhead here for 2+ granularities
+            inputs[f"pixel_values"] = res["pixel_values"]
+            inputs[f"labels_{granularity}"] = res["labels"]
 
         # Remove batch dimension (since processor adds it)
         inputs = {k: v.squeeze() for k, v in inputs.items()}
@@ -142,7 +124,7 @@ class SPINDataModule(L.LightningDataModule):
         self,
         annotation_dir: str,
         image_dir: str,
-        granularity: str,
+        granularities: list[str],
         processor: SegformerImageProcessor,
         batch_size: int = 8,
         crop_size=(0.8, 0.8),
@@ -151,7 +133,7 @@ class SPINDataModule(L.LightningDataModule):
         super().__init__()
         self.annotation_dir = annotation_dir
         self.image_dir = image_dir
-        self.granularity = granularity
+        self.granularities = granularities
         self.processor = processor
         self.batch_size = batch_size
         self.crop_size = crop_size
@@ -165,14 +147,14 @@ class SPINDataModule(L.LightningDataModule):
                 self.image_dir,
                 split="train",
                 processor=self.processor,
-                granularity=self.granularity,
+                granularities=self.granularities,
                 crop_size=self.crop_size,
             )
             self.val_dataset = SPINSegmentationDataset(
                 self.annotation_dir,
                 self.image_dir,
                 split="val",
-                granularity=self.granularity,
+                granularities=self.granularities,
                 processor=self.processor,
             )
 
@@ -200,6 +182,8 @@ class SegformerLightningModule(L.LightningModule):
         self,
         model_name: str,
         lr: float,
+        granularities: list[str],
+        hyperbolic: bool,
     ):
         super().__init__()
         # Save all hyperparameters so they can be later accessed via self.hparams
@@ -209,27 +193,22 @@ class SegformerLightningModule(L.LightningModule):
         self.backbone = self.model.segformer
         original_decode_head = self.model.decode_head
 
-        # Create three separate decode heads by reusing the original one as a template.
-        self.decode_head_whole = HyperbolicSegformerDecodeHead.from_segformer_decode_head(
-            copy.deepcopy(original_decode_head), num_labels_for_granularity("whole"), None, hyperbolic=False
-        )
-        self.decode_head_part = HyperbolicSegformerDecodeHead.from_segformer_decode_head(
-            copy.deepcopy(original_decode_head), num_labels_for_granularity("part"), None, hyperbolic=False
-        )
-        self.decode_head_subpart = HyperbolicSegformerDecodeHead.from_segformer_decode_head(
-            copy.deepcopy(original_decode_head), num_labels_for_granularity("subpart"), None, hyperbolic=False
-        )
-
-        self.jaccard_whole = MulticlassJaccardIndex(
-            num_classes=num_labels_for_granularity("whole"), ignore_index=background_class_for_granularity("whole")
-        )
-        self.jaccard_part = MulticlassJaccardIndex(
-            num_classes=num_labels_for_granularity("part"), ignore_index=background_class_for_granularity("part")
-        )
-        self.jaccard_subpart = MulticlassJaccardIndex(
-            num_classes=num_labels_for_granularity("subpart"), ignore_index=background_class_for_granularity("subpart")
-        )
         self.lr = lr
+        self.granularities = granularities
+
+        self.decode_heads = nn.ModuleDict({
+            g: HyperbolicSegformerDecodeHead.from_segformer_decode_head(
+                copy.deepcopy(original_decode_head), num_labels_for_granularity(g), None, hyperbolic=hyperbolic
+            )
+            for g in self.granularities
+        })
+
+        self.jaccards = nn.ModuleDict({
+            g: MulticlassJaccardIndex(
+                num_classes=num_labels_for_granularity(g), ignore_index=background_class_for_granularity(g)
+            )
+            for g in self.granularities
+        })
 
     def logits_to_loss(self, logits, labels, ignore_index, return_preds=False):
         # upsample logits to the images' original size
@@ -254,21 +233,18 @@ class SegformerLightningModule(L.LightningModule):
             return_dict=None,
         )
         encoder_hidden_states = outputs[1]
+        result = {}
         # Compute logits from each decoding head using the same backbone features
-        logits_whole = self.decode_head_whole(encoder_hidden_states)
-        logits_part = self.decode_head_part(encoder_hidden_states)
-        logits_subpart = self.decode_head_subpart(encoder_hidden_states)
-        return {
-            "logits_whole": logits_whole,
-            "logits_part": logits_part,
-            "logits_subpart": logits_subpart,
-        }
+        for granularity in self.granularities:
+            logits = self.decode_heads[granularity](encoder_hidden_states)
+            result[f"logits_{granularity}"] = logits
+        return result
 
     def training_step(self, batch, batch_idx):
         outputs = self.forward(batch["pixel_values"])
 
         loss = 0
-        for granularity in ["whole", "part", "subpart"]:
+        for granularity in self.granularities:
             logits = outputs[f"logits_{granularity}"]
             labels = batch[f"labels_{granularity}"]
             loss += self.logits_to_loss(logits, labels, background_class_for_granularity(granularity))
@@ -280,20 +256,19 @@ class SegformerLightningModule(L.LightningModule):
         outputs = self.forward(batch["pixel_values"])
 
         val_loss = 0
-        for granularity, metric in zip(["whole", "part", "subpart"],
-                                       [self.jaccard_whole, self.jaccard_part, self.jaccard_subpart]):
+        for granularity in self.granularities:
             logits = outputs[f"logits_{granularity}"]
             labels = batch[f"labels_{granularity}"]
             result = self.logits_to_loss(logits, labels, background_class_for_granularity(granularity), return_preds=True)
             val_loss += result["loss"]
-            metric.update(result["preds"], labels)
+            self.jaccards[granularity].update(result["preds"], labels)
 
         self.log("val_loss", val_loss, on_step=False, on_epoch=True, prog_bar=True)
         return val_loss
 
     def on_validation_epoch_end(self):
-        for granularity, metric in zip(["whole", "part", "subpart"],
-                                       [self.jaccard_whole, self.jaccard_part, self.jaccard_subpart]):
+        for granularity in self.granularities:
+            metric = self.jaccards[granularity]
             miou = metric.compute()
             self.log(f"val_mIoU_{granularity}", miou, prog_bar=True)
             metric.reset()
@@ -309,6 +284,7 @@ def parse_args():
     parser.add_argument("--model_name", type=str, default="nvidia/segformer-b0-finetuned-ade-512-512", help="Name of the pre-trained model")
     parser.add_argument("--granularity", type=str, default="subpart", choices=["whole", "part", "subpart", "all"], required=True,
                         help="Level of segmentation granularity: whole, part, or subpart")
+    parser.add_argument("--hyperbolic", action="store_true", help="Use hyperbolic decode head if specified")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
     parser.add_argument("--num_epochs", type=int, default=10, help="Number of epochs")
     parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate")
@@ -327,13 +303,18 @@ def main():
 
     L.seed_everything(args.seed, workers=True)
 
+    if args.granularity == "all":
+        granularities = ["whole", "part", "subpart"]
+    else:
+        granularities = [args.granularity]
+
     processor = SegformerImageProcessor.from_pretrained(args.model_name)
     processor.do_reduce_labels = False
 
     spin_dm = SPINDataModule(
         annotation_dir=dataset_annotation_dir,
         image_dir=dataset_image_dir,
-        granularity=args.granularity,
+        granularities=granularities,
         processor=processor,
         batch_size=args.batch_size,
         crop_size=args.crop_size,
@@ -343,6 +324,8 @@ def main():
     segformer_module = SegformerLightningModule(
         model_name=args.model_name,
         lr=args.learning_rate,
+        granularities=granularities,
+        hyperbolic=args.hyperbolic,
     )
 
     wandb_logger = WandbLogger(
