@@ -47,23 +47,25 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
 
         # logits are of shape (batch_size, num_labels, height/4, width/4)
         if self.hyperbolic:
-            ball = gt.PoincareBall(c=1.0)
+            ball = gt.PoincareBall(c=self.curvature)
             output = hidden_states.permute((0, 2, 3, 1))
             out_proj = ball.expmap0(output)  # seems to just map the vector to the ball
-            output = self.embedding_space.run_log_torch(out_proj, self.offsets, self.normals, 1.0)
+            output = self.embedding_space.run_log_torch(out_proj, self.offsets, self.normals, self.curvature)
             logits = output.permute((0, 3, 1, 2))
         else:
             logits = self.classifier(hidden_states)
 
         return logits
 
-    def __post_init__(self, num_classes, dim=None, hyperbolic=True):
+    def __post_init__(self, num_classes, dim, hyperbolic, curvature):
         if dim is None:
             self.dim = self.config.decoder_hidden_size
         else:
             self.dim = dim
         self.hyperbolic = hyperbolic
-        self.ball = gt.PoincareBall(c=1.0)
+
+        self.curvature = curvature
+        self.ball = gt.PoincareBall(c=self.curvature)
         normals_ = torch.randn(num_classes, self.dim) * 1e-5
         normals_ = pmath.expmap0(normals_, k=self.ball.k)
         self.normals = gt.ManifoldParameter(normals_, manifold=self.ball, requires_grad=True)
@@ -72,7 +74,6 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
         offsets_ = pmath.expmap0(offsets_, k=self.ball.k)
         self.offsets = gt.ManifoldParameter(offsets_, manifold=self.ball, requires_grad=True)
 
-        self.curvature = torch.tensor(1.0)
 
         self.normals.requires_grad_()
         self.offsets.requires_grad_()
@@ -89,10 +90,10 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
 
     @classmethod
     def from_segformer_decode_head(
-            cls, segformer_decode_head: SegformerDecodeHead, num_classes, dim, hyperbolic
+            cls, segformer_decode_head: SegformerDecodeHead, num_classes, dim, hyperbolic, curvature=1.0
     ) -> "HyperbolicSegformerDecodeHead":
         segformer_decode_head.__class__ = cls
 
-        segformer_decode_head.__post_init__(num_classes, dim, hyperbolic)
+        segformer_decode_head.__post_init__(num_classes, dim, hyperbolic, curvature)
 
         return segformer_decode_head

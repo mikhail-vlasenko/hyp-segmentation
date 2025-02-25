@@ -184,6 +184,7 @@ class SegformerLightningModule(L.LightningModule):
         lr: float,
         granularities: list[str],
         hyperbolic: bool,
+        curvature: float,
     ):
         super().__init__()
         # Save all hyperparameters so they can be later accessed via self.hparams
@@ -198,7 +199,11 @@ class SegformerLightningModule(L.LightningModule):
 
         self.decode_heads = nn.ModuleDict({
             g: HyperbolicSegformerDecodeHead.from_segformer_decode_head(
-                copy.deepcopy(original_decode_head), num_labels_for_granularity(g), None, hyperbolic=hyperbolic
+                copy.deepcopy(original_decode_head),
+                num_labels_for_granularity(g),
+                None,
+                hyperbolic,
+                curvature,
             )
             for g in self.granularities
         })
@@ -285,6 +290,7 @@ def parse_args():
     parser.add_argument("--granularity", type=str, default="subpart", choices=["whole", "part", "subpart", "all"], required=True,
                         help="Level of segmentation granularity: whole, part, or subpart")
     parser.add_argument("--hyperbolic", action="store_true", help="Use hyperbolic decode head if specified")
+    parser.add_argument("--curvature", type=float, default=1., help="Hyperbolic curvature")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
     parser.add_argument("--num_epochs", type=int, default=10, help="Number of epochs")
     parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate")
@@ -326,6 +332,7 @@ def main():
         lr=args.learning_rate,
         granularities=granularities,
         hyperbolic=args.hyperbolic,
+        curvature=args.curvature,
     )
 
     wandb_logger = WandbLogger(
