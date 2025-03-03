@@ -17,6 +17,8 @@ from transformers import SegformerImageProcessor, SegformerForSemanticSegmentati
 from torchmetrics.classification import MulticlassJaccardIndex
 
 from spin import SPIN
+
+from prototypes import create_prototypes
 from segformer_head import HyperbolicSegformerDecodeHead
 from PIL import Image
 
@@ -185,6 +187,7 @@ class SegformerLightningModule(L.LightningModule):
         granularities: list[str],
         hyperbolic: bool,
         curvature: float,
+        max_class_sep: bool,
     ):
         super().__init__()
         # Save all hyperparameters so they can be later accessed via self.hparams
@@ -197,10 +200,18 @@ class SegformerLightningModule(L.LightningModule):
         self.lr = lr
         self.granularities = granularities
 
+        self.max_class_sep = max_class_sep
+        if self.max_class_sep:
+            assert self.granularities == ["subpart"]
+            self.prototypes = create_prototypes(num_labels_for_granularity("subpart"))
+            self.prototypes = torch.from_numpy(self.prototypes).float()
+            dim = self.prototypes.shape[1]
+            self.prototypes = self.prototypes.t().cuda()
+
         self.decode_heads = nn.ModuleDict({
             g: HyperbolicSegformerDecodeHead.from_segformer_decode_head(
                 copy.deepcopy(original_decode_head),
-                num_labels_for_granularity(g),
+                num_labels_for_granularity(g) if not self.max_class_sep else dim,
                 None,
                 hyperbolic,
                 curvature,
@@ -242,6 +253,11 @@ class SegformerLightningModule(L.LightningModule):
         # Compute logits from each decoding head using the same backbone features
         for granularity in self.granularities:
             logits = self.decode_heads[granularity](encoder_hidden_states)
+            if self.max_class_sep:
+                # logits are of shape (batch, num_classes - 1, h, w)
+                # prototypes are of shape (num_classes - 1, num_classes)
+                # we want (batch, num_classes, h, w) on output
+                logits = torch.einsum("bchw,cd->bdhw", logits, self.prototypes)
             result[f"logits_{granularity}"] = logits
         return result
 
@@ -291,6 +307,7 @@ def parse_args():
                         help="Level of segmentation granularity: whole, part, or subpart")
     parser.add_argument("--hyperbolic", action="store_true", help="Use hyperbolic decode head if specified")
     parser.add_argument("--curvature", type=float, default=1., help="Hyperbolic curvature")
+    parser.add_argument("--max_class_sep", action="store_true", help="Use maximum class separation prototypes pipeline")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
     parser.add_argument("--num_epochs", type=int, default=10, help="Number of epochs")
     parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate")
@@ -333,6 +350,7 @@ def main():
         granularities=granularities,
         hyperbolic=args.hyperbolic,
         curvature=args.curvature,
+        max_class_sep=args.max_class_sep,
     )
 
     wandb_logger = WandbLogger(
