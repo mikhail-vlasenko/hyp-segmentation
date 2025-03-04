@@ -152,6 +152,7 @@ class SPINDataModule(L.LightningDataModule):
                 granularities=self.granularities,
                 crop_size=self.crop_size,
             )
+        if stage == "val" or stage == "fit" or stage is None:
             self.val_dataset = SPINSegmentationDataset(
                 self.annotation_dir,
                 self.image_dir,

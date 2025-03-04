@@ -1,21 +1,3 @@
-#!/usr/bin/env python
-"""
-inference.py
-
-This script loads a saved SegformerLightningModule checkpoint, performs segmentation on a specified image,
-and produces a three-panel plot:
-  - Left: the original image.
-  - Middle: the segmentation map with random colors for each predicted class.
-  - Right: a scatter plot where, for every non-background pixel (sampled every 10th),
-           the x-axis is the flattened pixel index and the y-axis is the L2 magnitude of the representation vector.
-
-Usage:
-    python inference.py --checkpoint_path <path/to/lightning_checkpoint.ckpt> \
-                        --processor_dir <path/to/processor_dir> \
-                        --image_path <path/to/image.jpg> \
-                        [--granularity subpart]
-"""
-
 import argparse
 import os
 import torch
@@ -26,11 +8,7 @@ import torch.nn.functional as F
 
 from transformers import SegformerImageProcessor
 
-# Import geoopt and embedding space if required by your head.
-import geoopt
-import geoopt.manifolds.stereographic.math as pmath
-from embedding_space import EmbeddingSpace
-from lightning_segformer import SegformerLightningModule, background_class_for_granularity, num_labels_for_granularity
+from lightning_segformer import SegformerLightningModule
 
 
 def get_random_colormap(num_classes):
@@ -60,6 +38,7 @@ def main():
                         help="Segmentation granularity; default is 'subpart' (204 classes)")
     args = parser.parse_args()
 
+    # n01632458_1776
     images = ["n04482393_12929.JPEG", "n04612504_5184.JPEG",  "n01614925_1726.JPEG", "n01484850_1581.JPEG"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
