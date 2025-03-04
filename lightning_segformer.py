@@ -188,6 +188,7 @@ class SegformerLightningModule(L.LightningModule):
         hyperbolic: bool,
         curvature: float,
         max_class_sep: bool,
+        background_loss_weight: float = 0,
     ):
         super().__init__()
         # Save all hyperparameters so they can be later accessed via self.hparams
@@ -199,6 +200,10 @@ class SegformerLightningModule(L.LightningModule):
 
         self.lr = lr
         self.granularities = granularities
+        self.background_loss_weight = background_loss_weight
+        self.ignore_background = background_loss_weight == 0
+        if self.ignore_background:
+            print("Ignoring background class in mIoU computation")
 
         self.max_class_sep = max_class_sep
         if self.max_class_sep:
@@ -221,17 +226,21 @@ class SegformerLightningModule(L.LightningModule):
 
         self.jaccards = nn.ModuleDict({
             g: MulticlassJaccardIndex(
-                num_classes=num_labels_for_granularity(g), ignore_index=background_class_for_granularity(g)
+                num_classes=num_labels_for_granularity(g),
+                ignore_index=background_class_for_granularity(g) if self.ignore_background else None
             )
             for g in self.granularities
         })
 
-    def logits_to_loss(self, logits, labels, ignore_index, return_preds=False):
+    def logits_to_loss(self, logits, labels, num_classes, background_index, return_preds=False):
         # upsample logits to the images' original size
         upsampled_logits = nn.functional.interpolate(
             logits, size=labels.shape[-2:], mode="bilinear", align_corners=False
         )
-        loss_fct = CrossEntropyLoss(ignore_index=ignore_index)
+        loss_weights = torch.ones(num_classes).to(logits.device)
+        loss_weights[background_index] = self.background_loss_weight
+        loss_fct = CrossEntropyLoss(weight=loss_weights)
+
         loss = loss_fct(upsampled_logits, labels)
         if return_preds:
             preds = torch.argmax(upsampled_logits, dim=1)
@@ -268,7 +277,11 @@ class SegformerLightningModule(L.LightningModule):
         for granularity in self.granularities:
             logits = outputs[f"logits_{granularity}"]
             labels = batch[f"labels_{granularity}"]
-            loss += self.logits_to_loss(logits, labels, background_class_for_granularity(granularity))
+            loss += self.logits_to_loss(
+                logits, labels,
+                num_labels_for_granularity(granularity),
+                background_class_for_granularity(granularity)
+            )
 
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         return loss
@@ -280,7 +293,12 @@ class SegformerLightningModule(L.LightningModule):
         for granularity in self.granularities:
             logits = outputs[f"logits_{granularity}"]
             labels = batch[f"labels_{granularity}"]
-            result = self.logits_to_loss(logits, labels, background_class_for_granularity(granularity), return_preds=True)
+            result = self.logits_to_loss(
+                logits, labels,
+                num_labels_for_granularity(granularity),
+                background_class_for_granularity(granularity),
+                return_preds=True
+            )
             val_loss += result["loss"]
             self.jaccards[granularity].update(result["preds"], labels)
 
@@ -311,6 +329,7 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
     parser.add_argument("--num_epochs", type=int, default=10, help="Number of epochs")
     parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate")
+    parser.add_argument("--background_loss_weight", type=float, default=0.1, help="Weight for the background class in the loss")
     parser.add_argument("--crop_size", type=float, nargs=2, default=(0.8, 0.8), help="Crop size as a fraction of image dimensions")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--num_workers", type=int, default=4, help="Number of workers for data loading")
@@ -351,6 +370,7 @@ def main():
         hyperbolic=args.hyperbolic,
         curvature=args.curvature,
         max_class_sep=args.max_class_sep,
+        background_loss_weight=args.background_loss_weight,
     )
 
     wandb_logger = WandbLogger(

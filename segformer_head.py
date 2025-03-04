@@ -13,7 +13,7 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
     def __init__(self):
         raise NotImplementedError
 
-    def forward(self, encoder_hidden_states: torch.FloatTensor) -> torch.Tensor:
+    def forward(self, encoder_hidden_states: torch.FloatTensor, return_repr: bool = False) -> torch.Tensor:
         self.embedding_space = EmbeddingSpace(self.offsets, self.normals, self.curvature)
         batch_size = encoder_hidden_states[-1].shape[0]
 
@@ -48,13 +48,16 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
         # logits are of shape (batch_size, num_labels, height/4, width/4)
         if self.hyperbolic:
             ball = gt.PoincareBall(c=self.curvature)
-            output = hidden_states.permute((0, 2, 3, 1))
-            out_proj = ball.expmap0(output)  # seems to just map the vector to the ball
-            output = self.embedding_space.run_log_torch(out_proj, self.offsets, self.normals, self.curvature)
-            logits = output.permute((0, 3, 1, 2))
+            output = hidden_states.permute(0, 2, 3, 1)
+            rep = ball.expmap0(output)
+            logits = self.embedding_space.run_log_torch(rep, self.offsets, self.normals, self.curvature)
+            logits = logits.permute(0, 3, 1, 2)
         else:
             logits = self.classifier(hidden_states)
+            rep = hidden_states
 
+        if return_repr:
+            return logits, rep
         return logits
 
     def __post_init__(self, num_classes, dim, hyperbolic, curvature):
