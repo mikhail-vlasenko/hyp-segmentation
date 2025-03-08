@@ -29,7 +29,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Inference script for lightning checkpoint segmentation and representation visualization"
     )
-    parser.add_argument("--checkpoint_path", type=str, default="hyperbolic-segmentation/cwkfylyg/checkpoints/epoch=9-step=11040.ckpt",
+    parser.add_argument("--checkpoint_path", type=str, default="hyperbolic-segmentation/wuphh4g6/checkpoints/epoch=34-step=19320.ckpt",
                         help="Path to the saved lightning module checkpoint (.ckpt)")
     parser.add_argument("--image_path", type=str, default="/home/misha/data/PartImageNet/images/train",
                         help="Path to the image file to segment")
@@ -49,7 +49,7 @@ def main():
     lightning_module.eval()
 
     # Load the processor.
-    processor = SegformerImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
+    processor = SegformerImageProcessor.from_pretrained("nvidia/segformer-b4-finetuned-ade-512-512")
     processor.do_reduce_labels = False
 
     for image_filename in images:
