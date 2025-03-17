@@ -79,11 +79,42 @@ def geoopt_norm(p, z):
     dim = -1
     keepdim = False
     c = ball.k
-    return _mobius_add(-p, z, c, dim=dim).norm(dim=dim, p=2, keepdim=keepdim)
+    return _mobius_add(p, z, c, dim=dim).norm(dim=dim, p=2, keepdim=keepdim)
+
+def atigh_2022_norm(p, z):
+    # based on Atigh et al. 2022
+    # the formulas expect negative curvature
+    c = -ball.k
+    pp = torch.sum(p * p, dim=-1, keepdim=False)
+    zz = torch.sum(z * z, dim=-1, keepdim=False)
+    pz = torch.sum(p * z, dim=-1, keepdim=False)
+
+    # compute the denominator for alpha and beta from Eq. 9
+    denom = 1 + 2 * c * pz + c ** 2 * zz * pp
+    denom = denom.clamp_min(1e-15)
+
+    # compute the numerators for alpha and beta from Eq. 9
+    a_num = 1 + 2 * c * pz + c * zz
+    b_num = 1 - c * pp
+
+    alpha = a_num / denom
+    beta = b_num / denom
+
+    # by Eq. 11
+    mobius_norm2 = alpha ** 2 * pp + 2 * alpha * beta * pz + beta ** 2 * zz
+    mobius_norm = torch.sqrt(mobius_norm2)
+    return mobius_norm
+
+def atigh_2022_dist(p, z):
+    mobius_norm = atigh_2022_norm(-p, z)
+    curvature = ball.k
+
+    return 2.0 * artan_k(
+        mobius_norm, curvature
+    )
 
 def my_norm(p, z):
     c = ball.k
-    p = -p
     pp = torch.sum(p * p, dim=-1, keepdim=False)
     zz = torch.sum(z * z, dim=-1, keepdim=False)
     pz = torch.sum(p * z, dim=-1, keepdim=False)
@@ -94,28 +125,20 @@ def my_norm(p, z):
 
     under_root_sum = alpha ** 2 * pp + 2 * alpha * beta * pz + beta ** 2 * zz
 
-    mobius_norm = torch.sqrt(under_root_sum) / denom
+    mobius_norm = torch.sqrt(under_root_sum) / denom.clamp_min(1e-15)
     return mobius_norm
 
 def faster_dist(p, z):
-    mobius_norm = my_norm(p, z)
+    mobius_norm = my_norm(-p, z)
     curvature = ball.k
-
-    # another_norm = pasted_norm(p.unsqueeze(1).unsqueeze(1), z.squeeze(1), curvature)
-    # print(another_norm.shape)
-    # another_norm = another_norm.squeeze(1).squeeze(1).T
-    # another_norm = torch.sqrt(another_norm)
-    # print(another_norm.shape)
-    # print("pasted norm")
-    # print(another_norm)
 
     return 2.0 * artan_k(
         mobius_norm, curvature
     )
 
 
-dist_funcs = [usual_dist, internal_dist, faster_dist]
-# dist_funcs = [geoopt_norm, my_norm]
+dist_funcs = [usual_dist, internal_dist, faster_dist, atigh_2022_dist]
+# dist_funcs = [geoopt_norm, my_norm, atigh_2022_norm]
 shape = None
 values = None
 
@@ -142,9 +165,10 @@ for dist_func in dist_funcs:
     else:
         assert shape == distances.shape
         if not torch.allclose(values, distances.detach(), rtol=2e-3):
-            print(f"{dist_func.__name__} failed")
-            print(values)
+            print(f"{dist_func.__name__} failed by getting")
             print(distances)
+            print("expected")
+            print(values)
             print("diff")
             print(torch.abs(values - distances))
             print(f"max diff: {torch.max(torch.abs(values - distances))}")
