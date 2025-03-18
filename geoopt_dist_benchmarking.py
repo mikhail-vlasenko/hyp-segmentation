@@ -6,7 +6,7 @@ from geoopt.manifolds.stereographic.math import artan_k, _mobius_add
 import torch.nn.functional as F
 
 
-ball = gt.PoincareBall(c=1.)
+ball = gt.PoincareBall(c=0.5)
 
 
 def usual_dist(_reps, _prototypes):
@@ -115,6 +115,32 @@ def with_pasted_norm(p, z):
         torch.sqrt(mobaddnorm), ball.k
     )
 
+def arcosh(x):
+    # there isn't an arcosh in geoopt
+    return (x + torch.sqrt(-1 + x.pow(2))).clamp_min(1e-15).log().to(x.dtype)
+
+def induced_distance(p, z):
+    # https://math.stackexchange.com/questions/3279762/emulating-distance-on-poincar%C3%A9-disk-for-different-curvatures
+    r = 1 / torch.sqrt(-ball.k)
+    p = p / r
+    z = z / r
+
+    # we need to compute
+    # ∥p−z∥^2
+    # a way to do that without a memory blowup is
+    # ∥p∥^2 + ∥z∥^2 − 2⟨z,p⟩
+    pp = torch.sum(p * p, dim=-1, keepdim=False)
+    zz = torch.sum(z * z, dim=-1, keepdim=False)
+    pz = torch.einsum('...i,...i->...', p, z)
+
+    num = pp + zz - 2 * pz
+
+    # conveniently, we can reuse the above computation to get the denominator
+    denom = ((1 - pp) * (1 - zz))
+    return r * arcosh(
+        1 + 2 * num / denom,
+    )
+
 def my_norm(p, z):
     c = ball.k  # this actually gives negative curvature
     pp = torch.sum(p * p, dim=-1, keepdim=False)
@@ -139,7 +165,7 @@ def faster_dist(p, z):
     )
 
 
-dist_funcs = [usual_dist, faster_dist, atigh_2022_dist, with_pasted_norm]
+dist_funcs = [usual_dist, induced_distance, faster_dist, atigh_2022_dist, with_pasted_norm]
 # dist_funcs = [geoopt_norm, my_norm, atigh_2022_norm]
 shape = None
 values = None
@@ -147,7 +173,7 @@ values = None
 for dist_func in dist_funcs:
     torch.manual_seed(0)
     num_classes = 200
-    batch_size = 2**14
+    batch_size = 2**10
     grad = True
     reps = torch.randn(batch_size, num_classes - 1, device="cpu", requires_grad=grad)
     prototypes = torch.randn(num_classes, 1, num_classes - 1, device="cpu", requires_grad=grad)
