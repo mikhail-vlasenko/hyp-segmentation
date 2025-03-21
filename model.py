@@ -112,7 +112,6 @@ class SegformerLightningModule(L.LightningModule):
             )
 
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
-        print("training step done")
         return loss
 
     def validation_step(self, batch, batch_idx):

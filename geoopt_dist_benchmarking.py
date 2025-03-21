@@ -129,8 +129,8 @@ def induced_distance(p, z):
     # ∥p−z∥^2
     # a way to do that without a memory blowup is
     # ∥p∥^2 + ∥z∥^2 − 2⟨z,p⟩
-    pp = torch.sum(p * p, dim=-1, keepdim=False)
-    zz = torch.sum(z * z, dim=-1, keepdim=False)
+    pp = torch.sum(p.pow(2), dim=-1, keepdim=False)
+    zz = torch.sum(z.pow(2), dim=-1, keepdim=False)
     pz = torch.einsum('...i,...i->...', p, z)
 
     num = pp + zz - 2 * pz
@@ -143,8 +143,8 @@ def induced_distance(p, z):
 
 def my_norm(p, z):
     c = ball.k  # this actually gives negative curvature
-    pp = torch.sum(p * p, dim=-1, keepdim=False)
-    zz = torch.sum(z * z, dim=-1, keepdim=False)
+    pp = torch.sum(p.pow(2), dim=-1, keepdim=False)
+    zz = torch.sum(z.pow(2), dim=-1, keepdim=False)
     pz = torch.einsum('...i,...i->...', p, z)
 
     denom = 1 - 2 * c * pz + c ** 2 * zz * pp
@@ -172,11 +172,11 @@ values = None
 
 for dist_func in dist_funcs:
     torch.manual_seed(0)
-    num_classes = 200
-    batch_size = 2**10
+    num_classes = 204
+    batch_size = 2**14
     grad = True
-    reps = torch.randn(batch_size, num_classes - 1, device="cpu", requires_grad=grad)
-    prototypes = torch.randn(num_classes, 1, num_classes - 1, device="cpu", requires_grad=grad)
+    reps = torch.randn(batch_size, num_classes - 1, device="cuda", requires_grad=grad)
+    prototypes = torch.randn(num_classes, 1, num_classes - 1, device="cuda", requires_grad=grad)
     # reps = torch.randn(num_classes - 1, device="cpu", requires_grad=grad)
     # prototypes = torch.randn(num_classes - 1, device="cpu", requires_grad=grad)
 
@@ -184,7 +184,7 @@ for dist_func in dist_funcs:
     prototypes = ball.expmap0(prototypes)
 
     start = time.time()
-    distances = dist_func(reps, prototypes)
+    distances = dist_func(reps, prototypes).T
     finish = time.time()
     if shape is None:
         shape = distances.shape
@@ -202,4 +202,5 @@ for dist_func in dist_funcs:
             print(f"max diff: {torch.max(torch.abs(values - distances))}")
             print(f"max relative diff: {torch.max(torch.abs(values - distances) / torch.abs(values))}")
             break
-    print(f"time for {dist_func.__name__}: {finish - start}")
+    print(f"time for {dist_func.__name__}: {finish - start}. "
+          f"max relative diff: {torch.max(torch.abs(values - distances) / torch.abs(values))}")

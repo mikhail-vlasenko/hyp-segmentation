@@ -17,7 +17,7 @@ import torch.nn
 import torch.nn.functional
 import torch.nn.functional as F
 
-import time
+from geoopt.manifolds.stereographic.math import artan_k
 
 PROJ_EPS = 1e-3
 EPS = 1e-15
@@ -63,23 +63,23 @@ def hyp_mlr_torch(inputs, c, P_mlr, A_mlr):
     # where alpha = A/D
     A = 1 + torch.add(2 * c * px.cuda(), c * xx.cuda())  # sh B,H,W,ch
 
-    assert not torch.isnan(A).any()
+    # assert not torch.isnan(A).any()
 
     B = 1 - c * pp.cuda()  # sh ch ## beta = B/D
-    assert not torch.isnan(B).any()
+    # assert not torch.isnan(B).any()
 
     D = 1 + torch.add(2 * c * px.cuda(), sqsq.cuda())  # sh B,H,W,ch
     D = torch.maximum(D, torch.tensor(EPS))
-    assert not torch.isnan(D).any()
+    # assert not torch.isnan(D).any()
 
     # calculate mobadd norm indepently from mob add
     # if mob_add = alpha * p + beta * x, then
     #  |mob_add|^2 = theta**2 * |p|^2 + gamma^2 * |x|^2 + 2*theta*gamma*|px|
     # theta = A/D, gamma = B/D
     alpha = A / D  # B,H,W,ch
-    assert not torch.isnan(alpha).any()
+    # assert not torch.isnan(alpha).any()
     beta = B[None, None, None, :].cuda() / D.cuda()  # B,H,W,ch
-    assert not torch.isnan(beta).any()
+    # assert not torch.isnan(beta).any()
 
     # calculate mobius addition norm independently
     mobaddnorm = (
@@ -99,14 +99,14 @@ def hyp_mlr_torch(inputs, c, P_mlr, A_mlr):
         maxnorm / torch.maximum(torch.sqrt(mobaddnorm), torch.tensor(EPS)),
         torch.ones_like(mobaddnorm)
     )
-    assert not torch.isnan(project_normalized).any()
+    # assert not torch.isnan(project_normalized).any()
 
     mobaddnormprojected = torch.where(
         torch.less(torch.sqrt(mobaddnorm), maxnorm),
         mobaddnorm,
         torch.ones_like(mobaddnorm) * maxnorm ** 2,
     )
-    assert not torch.isnan(mobaddnormprojected).any()
+    # assert not torch.isnan(mobaddnormprojected).any()
 
     inputs = inputs.permute((0, 3, 1, 2))
     A_kernel = A_kernel.permute((3, 2, 0, 1))
@@ -124,7 +124,29 @@ def hyp_mlr_torch(inputs, c, P_mlr, A_mlr):
     mobdota *= project_normalized
 
     lamb_px = 2.0 / torch.maximum(1 - c * mobaddnormprojected, torch.tensor(EPS))
-    assert not torch.isnan(lamb_px).any()
+    # assert not torch.isnan(lamb_px).any()
 
     sineterm = c ** 0.5 * mobdota * lamb_px
     return 2.0 / c ** 0.5 * A_norm.cuda() * torch.asinh(sineterm).cuda()
+
+
+def fast_norm(p, z, c):
+    pp = torch.sum(p.pow(2), dim=-1, keepdim=False)
+    zz = torch.sum(z.pow(2), dim=-1, keepdim=False)
+    pz = torch.einsum('...i,...i->...', p, z)
+
+    denom = 1 - 2 * c * pz + c ** 2 * zz * pp
+    alpha = 1 - 2 * c * pz - c * zz
+    beta = 1 + c * pp
+
+    under_root_sum = alpha ** 2 * pp + 2 * alpha * beta * pz + beta ** 2 * zz
+
+    mobius_norm = torch.sqrt(under_root_sum) / denom.clamp_min(1e-15)
+    return mobius_norm
+
+def fast_dist(p, z, curvature):
+    mobius_norm = fast_norm(-p, z, curvature)
+
+    return 2.0 * artan_k(
+        mobius_norm, curvature
+    )

@@ -7,8 +7,8 @@ import geoopt.manifolds.stereographic.math as pmath
 from transformers import SegformerDecodeHead
 
 from embedding_space import EmbeddingSpace
+from hyperbolic_layers import fast_dist
 from prototypes import create_prototypes
-from utils import num_labels_for_granularity
 
 
 class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
@@ -55,19 +55,9 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
             rep = ball.expmap0(output)
             if self.max_class_sep:
                 rep_shape = rep.shape
-                rep = rep.view(-1, self.num_classes)
-                # geoopt does not support a distance matrix so we compute it row by row
-                # this turns out reasonably fast for 200 classes
-                print("computing distances")
-                with torch.no_grad():
-                    distances = []
-                    for i in range(self.prototypes.shape[0]):
-                        distances.append(ball.dist(rep, self.prototypes[i].unsqueeze(0)))
-                    distances = torch.stack(distances).T
-
-                    distances = distances.view(*rep_shape[:-1], -1)
-                    logits = (-1 * distances * self.tau)
-                print("logits are computed")
+                rep = rep.view(-1, rep.shape[-1])
+                distances = fast_dist(rep, self.prototypes, self.ball.k).T
+                logits = (-1 * distances * self.tau).reshape(*rep_shape[:-1], self.prototypes.shape[0])
             else:
                 self.embedding_space = EmbeddingSpace(self.offsets, self.normals, self.curvature)
                 logits = self.embedding_space.run_log_torch(rep, self.offsets, self.normals, self.curvature)
@@ -100,6 +90,7 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
             num_classes = prototypes.shape[1]
             if hyperbolic:
                 prototypes = prototypes * 0.95  # downscale to have prototypes in the ball, not on the boundary
+                prototypes = prototypes.unsqueeze(1)
             self.prototypes = torch.nn.Parameter(prototypes, requires_grad=False)
 
         self.hyperbolic = hyperbolic
