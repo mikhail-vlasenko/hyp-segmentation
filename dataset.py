@@ -134,14 +134,20 @@ class SPINDataModule(L.LightningDataModule):
                 granularities=self.granularities,
                 crop_size=self.crop_size,
             )
-        if stage == "val" or stage == "fit" or stage is None:
-            self.val_dataset = SPINSegmentationDataset(
-                self.annotation_dir,
-                self.image_dir,
-                split="val",
-                granularities=self.granularities,
-                processor=self.processor,
-            )
+        self.val_dataset = SPINSegmentationDataset(
+            self.annotation_dir,
+            self.image_dir,
+            split="val",
+            granularities=self.granularities,
+            processor=self.processor,
+        )
+        self.test_dataset = SPINSegmentationDataset(
+            self.annotation_dir,
+            self.image_dir,
+            split="test",
+            granularities=self.granularities,
+            processor=self.processor,
+        )
 
     def train_dataloader(self):
         return DataLoader(
@@ -155,6 +161,15 @@ class SPINDataModule(L.LightningDataModule):
     def val_dataloader(self):
         return DataLoader(
             self.val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            persistent_workers=True,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_dataset,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,

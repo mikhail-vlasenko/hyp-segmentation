@@ -129,7 +129,7 @@ class SegformerLightningModule(L.LightningModule):
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         return loss
 
-    def validation_step(self, batch, batch_idx):
+    def evaluation_step(self, batch, batch_idx):
         outputs = self.forward(batch["pixel_values"])
 
         val_loss = 0
@@ -145,18 +145,32 @@ class SegformerLightningModule(L.LightningModule):
             val_loss += result["loss"]
             self.jaccards[granularity].update(result["preds"], labels)
             self.no_bg_jaccards[granularity].update(result["preds"], labels)
+        return val_loss
 
+    def validation_step(self, batch, batch_idx):
+        val_loss = self.evaluation_step(batch, batch_idx)
         self.log("val_loss", val_loss, on_step=False, on_epoch=True, prog_bar=True)
         return val_loss
 
-    def on_validation_epoch_end(self):
+    def test_step(self, batch, batch_idx):
+        test_loss = self.evaluation_step(batch, batch_idx)
+        self.log("test_loss", test_loss, on_step=False, on_epoch=True, prog_bar=True)
+        return test_loss
+
+    def on_eval_epoch_end(self, prefix="val"):
         for granularity in self.granularities:
             metric = self.jaccards[granularity]
             no_bg_metric = self.no_bg_jaccards[granularity]
-            self.log(f"val_mIoU_{granularity}", metric.compute(), prog_bar=True)
-            self.log(f"val_mIoU_no_bg_{granularity}", no_bg_metric.compute(), prog_bar=True)
+            self.log(f"{prefix}_mIoU_{granularity}", metric.compute(), prog_bar=True)
+            self.log(f"{prefix}_mIoU_no_bg_{granularity}", no_bg_metric.compute(), prog_bar=True)
             metric.reset()
             no_bg_metric.reset()
+
+    def on_validation_epoch_end(self):
+        self.on_eval_epoch_end("val")
+
+    def on_test_epoch_end(self):
+        self.on_eval_epoch_end("test")
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)

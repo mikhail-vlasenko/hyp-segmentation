@@ -21,7 +21,7 @@ def parse_args():
     parser.add_argument("--max_class_sep", action="store_true", help="Use maximum class separation prototypes pipeline")
     parser.add_argument("--tau", type=float, default=10., help="Temperature parameter for class separation with prototypes in hyperbolic space")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
-    parser.add_argument("--num_epochs", type=int, default=10, help="Number of epochs")
+    parser.add_argument("--num_epochs", type=int, default=1, help="Number of epochs")
     parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate")
     parser.add_argument("--background_loss_weight", type=float, default=0.01, help="Weight for the background class in the cross-entropy loss")
     parser.add_argument("--focal_loss", type=bool, default=True, help="Use focal loss for training instead of cross-entropy")
@@ -88,6 +88,8 @@ def main():
     )
 
     trainer.fit(segformer_module, spin_dm)
+
+    trainer.test(segformer_module, spin_dm)
 
     save_dir = "segformer-finetuned-spin"
     os.makedirs(save_dir, exist_ok=True)
