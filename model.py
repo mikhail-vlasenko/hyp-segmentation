@@ -8,6 +8,7 @@ from torch import nn
 from torch.nn import CrossEntropyLoss
 
 from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
+from focal_loss.focal_loss import FocalLoss
 
 from torchmetrics.classification import MulticlassJaccardIndex
 
@@ -28,6 +29,8 @@ class SegformerLightningModule(L.LightningModule):
         max_class_sep: bool,
         tau: float,
         background_loss_weight: float = 0,
+        focal_loss: bool = False,
+        focal_loss_gamma: float = 0.7,
     ):
         super().__init__()
         # Save all hyperparameters so they can be later accessed via self.hparams
@@ -39,10 +42,10 @@ class SegformerLightningModule(L.LightningModule):
 
         self.lr = lr
         self.granularities = granularities
-        self.background_loss_weight = background_loss_weight
-        self.ignore_background = background_loss_weight == 0
-        if self.ignore_background:
-            print("Ignoring background class in mIoU computation")
+        self.focal_loss = focal_loss
+        self.focal_loss_gamma = focal_loss_gamma
+        if not self.focal_loss:
+            self.background_loss_weight = background_loss_weight
 
         self.decode_heads = nn.ModuleDict({
             g: HyperbolicSegformerDecodeHead.from_segformer_decode_head(
@@ -60,7 +63,14 @@ class SegformerLightningModule(L.LightningModule):
         self.jaccards = nn.ModuleDict({
             g: MulticlassJaccardIndex(
                 num_classes=num_labels_for_granularity(g),
-                ignore_index=background_class_for_granularity(g) if self.ignore_background else None
+                ignore_index=None
+            )
+            for g in self.granularities
+        })
+        self.no_bg_jaccards = nn.ModuleDict({
+            g: MulticlassJaccardIndex(
+                num_classes=num_labels_for_granularity(g),
+                ignore_index=background_class_for_granularity(g)
             )
             for g in self.granularities
         })
@@ -70,13 +80,18 @@ class SegformerLightningModule(L.LightningModule):
         upsampled_logits = nn.functional.interpolate(
             logits, size=labels.shape[-2:], mode="bilinear", align_corners=False
         )
-        loss_weights = torch.ones(num_classes).to(logits.device)
-        loss_weights[background_index] = self.background_loss_weight
-        loss_fct = CrossEntropyLoss(weight=loss_weights)
+        if self.focal_loss:
+            loss_fct = FocalLoss(gamma=self.focal_loss_gamma)
+            upsampled_logits = upsampled_logits.permute(0, 2, 3, 1)
+            upsampled_logits = nn.functional.softmax(upsampled_logits, dim=-1)
+        else:
+            loss_weights = torch.ones(num_classes).to(logits.device)
+            loss_weights[background_index] = self.background_loss_weight
+            loss_fct = CrossEntropyLoss(weight=loss_weights)
 
         loss = loss_fct(upsampled_logits, labels)
         if return_preds:
-            preds = torch.argmax(upsampled_logits, dim=1)
+            preds = torch.argmax(upsampled_logits, dim=-1 if self.focal_loss else 1)
             return {
                 "loss": loss,
                 "preds": preds,
@@ -129,6 +144,7 @@ class SegformerLightningModule(L.LightningModule):
             )
             val_loss += result["loss"]
             self.jaccards[granularity].update(result["preds"], labels)
+            self.no_bg_jaccards[granularity].update(result["preds"], labels)
 
         self.log("val_loss", val_loss, on_step=False, on_epoch=True, prog_bar=True)
         return val_loss
@@ -136,9 +152,11 @@ class SegformerLightningModule(L.LightningModule):
     def on_validation_epoch_end(self):
         for granularity in self.granularities:
             metric = self.jaccards[granularity]
-            miou = metric.compute()
-            self.log(f"val_mIoU_{granularity}", miou, prog_bar=True)
+            no_bg_metric = self.no_bg_jaccards[granularity]
+            self.log(f"val_mIoU_{granularity}", metric.compute(), prog_bar=True)
+            self.log(f"val_mIoU_no_bg_{granularity}", no_bg_metric.compute(), prog_bar=True)
             metric.reset()
+            no_bg_metric.reset()
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)

@@ -10,3 +10,4 @@ wandb~=0.19.5
 torchvision~=0.20.1
 spin-dataset-api==1.0.0
 lightning==2.5.0
+focal_loss_torch==0.1.2
