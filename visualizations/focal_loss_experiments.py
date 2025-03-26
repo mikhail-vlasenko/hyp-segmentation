@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 # Read the CSV file
-df = pd.read_csv("wandb_export_2025-03-25T12_18_50.947+01_00.csv")
+df = pd.read_csv("wandb_export_2025-03-26T11_19_00.427+01_00.csv")
 
 # Create a performance column: use test_mIoU_subpart if available, else use val_mIoU_subpart.
 df['performance'] = df['test_mIoU_subpart']
