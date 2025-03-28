@@ -31,6 +31,7 @@ class SegformerLightningModule(L.LightningModule):
         background_loss_weight: float = 0,
         focal_loss: bool = False,
         focal_loss_gamma: float = 0.7,
+        embeddings_path: str = None,
     ):
         super().__init__()
         # Save all hyperparameters so they can be later accessed via self.hparams
@@ -55,7 +56,8 @@ class SegformerLightningModule(L.LightningModule):
                 hyperbolic,
                 curvature,
                 max_class_sep,
-                tau
+                tau,
+                embeddings_path,
             )
             for g in self.granularities
         })

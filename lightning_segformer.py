@@ -18,7 +18,8 @@ def parse_args():
                         help="Level of segmentation granularity: whole, part, or subpart")
     parser.add_argument("--hyperbolic", action="store_true", help="Use hyperbolic decode head if specified")
     parser.add_argument("--curvature", type=float, default=1., help="Hyperbolic curvature")
-    parser.add_argument("--max_class_sep", action="store_true", help="Use maximum class separation prototypes pipeline")
+    parser.add_argument("--max_class_sep", action="store_true", help="Do prototypical learning")
+    parser.add_argument("--embeddings_path", type=str, default=None, help="Path to the embeddings file")
     parser.add_argument("--tau", type=float, default=10., help="Temperature parameter for class separation with prototypes in hyperbolic space")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
     parser.add_argument("--num_epochs", type=int, default=1, help="Number of epochs")
@@ -70,6 +71,7 @@ def main():
         background_loss_weight=args.background_loss_weight,
         focal_loss=args.focal_loss,
         focal_loss_gamma=args.focal_loss_gamma,
+        embeddings_path=args.embeddings_path,
     )
 
     wandb_logger = WandbLogger(
