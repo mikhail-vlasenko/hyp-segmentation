@@ -87,7 +87,7 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
             if embeddings_path:
                 # these should be already in the ball
                 prototypes = torch.load(embeddings_path).embeddings.weight.tensor
-                norm = torch.norm(prototypes.embeddings.weight.tensor, dim=1, p=2)
+                norm = torch.norm(prototypes, dim=1, p=2)
                 assert norm.max() < 1.0, f"Embeddings are not in the ball, max norm is {norm.max()}"
                 num_classes = prototypes.shape[1]  # make the decoder compress to the right channel dimension
             else:

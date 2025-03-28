@@ -6,6 +6,7 @@ transformers~=4.48.1
 pillow~=11.1.0
 tqdm~=4.66.5
 git+https://github.com/geoopt/geoopt.git@v0.5.1
+git+https://github.com/maxvanspengler/hyperbolic_learning_library.git
 wandb~=0.19.5
 torchvision~=0.20.1
 spin-dataset-api==1.0.0
