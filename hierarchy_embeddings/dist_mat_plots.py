@@ -34,6 +34,7 @@ def create_dist_diff_mat_plots(
     output_dir: str = "",
 ) -> None:
     diff_mat = ((embeddings_dist_mat - graph_dist_mat) / graph_dist_mat).abs()
+    diff_mat[torch.isnan(diff_mat)] = embeddings_dist_mat[torch.isnan(diff_mat)]
     df_cm = pd.DataFrame(
         diff_mat[:len(node_permutation), :len(node_permutation)],
         node_permutation,

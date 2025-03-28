@@ -28,10 +28,11 @@ def plot_hierarchy_tree(hierarchy: nx.DiGraph, title: str = "Hierarchy Tree", sa
     pos = get_tree_pos(hierarchy, root)
 
     plt.figure(figsize=(12, 10), dpi=300)
-    nx.draw(hierarchy, pos, with_labels=True, node_size=300, font_size=8, arrows=False)
+    nx.draw(hierarchy, pos, with_labels=True, node_size=300, font_size=6, arrows=False)
     plt.title(title)
     if save_path:
         plt.savefig(save_path)
     else:
         plt.show()
+    plt.clf()
 

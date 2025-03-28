@@ -1,4 +1,5 @@
 import argparse
+import pickle
 from datetime import datetime
 import json
 import os
@@ -34,21 +35,21 @@ def get_arg_parser():
         "-d",
         "--dataset",
         type=str,
-        choices=["cifar100", "cub-200-2011"],
-        default="cifar100",
+        choices=["cifar100", "spint_dataset"],
+        default="spin_dataset",
         help="Dataset corresponding to the hierarchy",
     )
     parser.add_argument(
         "--hierarchy-name",
         type=str,
-        default="cifar_hierarchy",
+        default="spin_hierarchy",
         help="Name of the file storing the hierarchy",
     )
     parser.add_argument(
         "--num-negs",
         type=int,
         default=64,
-        help="Number of negative edges that are too be sampled for each positive edge",
+        help="Number of negative edges that are to be sampled for each positive edge",
     )
     parser.add_argument(
         "--sample-from",
@@ -75,6 +76,7 @@ def get_arg_parser():
     parser.add_argument("--epochs", type=int, default=10000, help="Number of epochs for training")
     parser.add_argument("-c", "--curvature", type=float, default=1.0,
                         help="Curvature of the manifold (before containing function)", )
+    # doesn't seem to change much between 64 and 256
     parser.add_argument("-e", "--embedding-dim", type=int, default=64, help="Embedding dimension")
     parser.add_argument("--pretrain-lr", type=float, default=5.0,
                         help="Learning rate used for pretraining embeddings with PE loss", )
@@ -91,11 +93,10 @@ def get_arg_parser():
 
 if __name__ == "__main__":
     args = get_arg_parser()
+    args.epochs = 5000
 
     # Load the hierarchy and wrap a dataset around it
     hierarchy = load_hierarchy(dataset=args.dataset, hierarchy_name=args.hierarchy_name)
-
-    plot_hierarchy_tree(hierarchy, title="CIFAR100 Hierarchy")
 
     dataset = HierarchyEmbeddingDataset(
         hierarchy=hierarchy,
@@ -122,6 +123,8 @@ if __name__ == "__main__":
         now,
     )
     os.makedirs(exp_dir)
+
+    plot_hierarchy_tree(hierarchy, title="Class Hierarchy", save_path=os.path.join(exp_dir, "hierarchy_tree.png"))
 
     # Initialize the Poincare ball
     manifold = PoincareBall(c=Curvature(value=args.curvature))
@@ -236,7 +239,7 @@ if __name__ == "__main__":
 
     # Store the embeddings
     torch.save(
-        obj=hierarchy_embedding.state_dict(),
+        obj=hierarchy_embedding,
         f=os.path.join(
             exp_dir,
             f"{hierarchy_embedding.__class__.__name__}_weights_{args.embedding_dim}.pth",

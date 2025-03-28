@@ -41,3 +41,13 @@ class HierarchyEmbedding(Module):
             a=-0.001,
             b=0.001,
         )
+
+    @staticmethod
+    def load(state_dict: dict) -> "HierarchyEmbedding":
+        embedding = HierarchyEmbedding(
+            hierarchy=None,
+            embedding_dim=None,
+            manifold=None,
+        )
+        embedding.load_state_dict(state_dict)
+        return embedding
