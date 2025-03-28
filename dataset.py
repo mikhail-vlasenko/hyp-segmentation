@@ -51,11 +51,6 @@ class SPINSegmentationDataset(Dataset):
             split=split,
             download=False,
         )
-        pprint(self.spin_api.wholes.cats)
-        pprint(self.spin_api.parts.cats)
-        pprint(self.spin_api.subparts.cats)
-        pprint(file_to_object_mapping)
-        exit()
         self.granularities = granularities
         self.processor = processor
         self.image_ids = self.spin_api.getImgIds()
