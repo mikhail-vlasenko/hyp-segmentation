@@ -1,6 +1,8 @@
 import copy
 import os
 import argparse
+from typing import Union
+
 import torch
 import numpy as np
 import lightning as L
@@ -24,6 +26,7 @@ class SegformerLightningModule(L.LightningModule):
         model_name: str,
         lr: float,
         granularities: list[str],
+        head_dim: Union[int, None],
         hyperbolic: bool,
         curvature: float,
         max_class_sep: bool,
@@ -52,7 +55,7 @@ class SegformerLightningModule(L.LightningModule):
             g: HyperbolicSegformerDecodeHead.from_segformer_decode_head(
                 copy.deepcopy(original_decode_head),
                 num_labels_for_granularity(g),
-                None,
+                head_dim,
                 hyperbolic,
                 curvature,
                 max_class_sep,

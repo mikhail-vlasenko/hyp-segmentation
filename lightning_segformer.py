@@ -27,6 +27,7 @@ def parse_args():
     parser.add_argument("--background_loss_weight", type=float, default=0.01, help="Weight for the background class in the cross-entropy loss")
     parser.add_argument("--focal_loss", action="store_true", help="Use focal loss for training instead of cross-entropy")
     parser.add_argument("--focal_loss_gamma", type=float, default=0.7, help="Gamma parameter for focal loss")
+    parser.add_argument("--head_dim", type=int, default=None, help="Dimension reduction in the decode head")
     parser.add_argument("--crop_size", type=float, nargs=2, default=(0.8, 0.8), help="Crop size as a fraction of image dimensions")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--num_workers", type=int, default=4, help="Number of workers for data loading")
@@ -64,6 +65,7 @@ def main():
         model_name=args.model_name,
         lr=args.learning_rate,
         granularities=granularities,
+        head_dim=args.head_dim,
         hyperbolic=args.hyperbolic,
         curvature=args.curvature,
         max_class_sep=args.max_class_sep,

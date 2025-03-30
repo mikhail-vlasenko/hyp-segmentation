@@ -120,10 +120,10 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
 
         self.dim_reduce = nn.Identity()
         if self.dim != self.config.decoder_hidden_size:
+            # do not include non-linearity as we only need to reduce the representation dimension
             self.dim_reduce = nn.Sequential(
                 nn.Conv2d(self.config.decoder_hidden_size, self.dim, kernel_size=1),
-                nn.BatchNorm2d(self.dim),
-                # nn.ReLU(),  # leads to a failing assert on NaNs in hyperbolic almost immediately
+                # nn.BatchNorm2d(self.dim),
             )
 
         self.classifier = nn.Conv2d(self.dim, num_classes, kernel_size=1)
