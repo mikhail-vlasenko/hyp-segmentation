@@ -79,6 +79,10 @@ class SegformerLightningModule(L.LightningModule):
             )
             for g in self.granularities
         })
+        # self.hierarchical_jaccards = nn.ModuleDict({})
+        # Prepare containers for test predictions and targets.
+        self.test_preds = {g: [] for g in self.granularities}
+        self.test_targets = {g: [] for g in self.granularities}
 
     def logits_to_loss(self, logits, labels, num_classes, background_index, return_preds=False):
         # upsample logits to the images' original size
@@ -112,7 +116,7 @@ class SegformerLightningModule(L.LightningModule):
         )
         encoder_hidden_states = outputs[1]
         result = {}
-        # Compute logits from each decoding head using the same backbone features
+        # Compute logits for each granularity using the same backbone features
         for granularity in self.granularities:
             logits = self.decode_heads[granularity](encoder_hidden_states)
             result[f"logits_{granularity}"] = logits
@@ -134,10 +138,9 @@ class SegformerLightningModule(L.LightningModule):
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         return loss
 
-    def evaluation_step(self, batch, batch_idx):
+    def evaluation_step(self, batch, batch_idx, save_preds=False):
         outputs = self.forward(batch["pixel_values"])
-
-        val_loss = 0
+        eval_loss = 0
         for granularity in self.granularities:
             logits = outputs[f"logits_{granularity}"]
             labels = batch[f"labels_{granularity}"]
@@ -147,10 +150,13 @@ class SegformerLightningModule(L.LightningModule):
                 background_class_for_granularity(granularity),
                 return_preds=True
             )
-            val_loss += result["loss"]
+            eval_loss += result["loss"]
             self.jaccards[granularity].update(result["preds"], labels)
             self.no_bg_jaccards[granularity].update(result["preds"], labels)
-        return val_loss
+            if save_preds:
+                self.test_preds[granularity].append(result["preds"].detach().cpu())
+                self.test_targets[granularity].append(labels.detach().cpu())
+        return eval_loss
 
     def validation_step(self, batch, batch_idx):
         val_loss = self.evaluation_step(batch, batch_idx)
@@ -158,9 +164,42 @@ class SegformerLightningModule(L.LightningModule):
         return val_loss
 
     def test_step(self, batch, batch_idx):
-        test_loss = self.evaluation_step(batch, batch_idx)
+        test_loss = self.evaluation_step(batch, batch_idx, save_preds=True)
         self.log("test_loss", test_loss, on_step=False, on_epoch=True, prog_bar=True)
         return test_loss
+
+    def on_test_epoch_end(self):
+        self.on_eval_epoch_end("test")
+        import matplotlib.pyplot as plt
+        from sklearn.metrics import confusion_matrix
+
+        for granularity in self.granularities:
+            # Aggregate predictions and targets across batches.
+            preds = torch.cat(self.test_preds[granularity], dim=0).numpy().flatten()
+            targets = torch.cat(self.test_targets[granularity], dim=0).numpy().flatten()
+            num_classes = num_labels_for_granularity(granularity)
+            # Compute confusion matrix. Ensure that all classes are represented.
+            cm = confusion_matrix(targets, preds, labels=list(range(num_classes)))
+
+            # Create a figure for the confusion matrix.
+            fig, ax = plt.subplots(figsize=(12, 10), dpi=300)
+            cax = ax.matshow(cm, cmap=plt.cm.Blues)
+            fig.colorbar(cax)
+            ax.set_title(f"Confusion Matrix for {granularity}")
+            ax.set_xlabel("Predicted")
+            ax.set_ylabel("True")
+            ax.set_xticks(np.arange(num_classes))
+            ax.set_yticks(np.arange(num_classes))
+            # # Annotate each cell with its count.
+            # for i in range(num_classes):
+            #     for j in range(num_classes):
+            #         ax.text(j, i, str(cm[i, j]), ha='center', va='center', color='red')
+
+            plt.savefig(f"confusion_matrix_{granularity}.png")
+            plt.clf()
+        # Reset the stored predictions and targets.
+        self.test_preds = {g: [] for g in self.granularities}
+        self.test_targets = {g: [] for g in self.granularities}
 
     def on_eval_epoch_end(self, prefix="val"):
         for granularity in self.granularities:
@@ -173,9 +212,6 @@ class SegformerLightningModule(L.LightningModule):
 
     def on_validation_epoch_end(self):
         self.on_eval_epoch_end("val")
-
-    def on_test_epoch_end(self):
-        self.on_eval_epoch_end("test")
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
