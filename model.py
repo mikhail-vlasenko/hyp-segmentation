@@ -177,6 +177,7 @@ class SegformerLightningModule(L.LightningModule):
             # Aggregate predictions and targets across batches.
             preds = torch.cat(self.test_preds[granularity], dim=0).numpy().flatten()
             targets = torch.cat(self.test_targets[granularity], dim=0).numpy().flatten()
+            share_correct = np.sum(preds == targets) / len(preds)
             num_classes = num_labels_for_granularity(granularity)
             # Compute confusion matrix. Ensure that all classes are represented.
             cm = confusion_matrix(targets, preds, labels=list(range(num_classes)))
@@ -184,21 +185,29 @@ class SegformerLightningModule(L.LightningModule):
             # set diagonal to 0
             np.fill_diagonal(cm, 0)
 
-            # Create a figure for the confusion matrix.
             fig, ax = plt.subplots(figsize=(12, 10), dpi=300)
             cax = ax.matshow(cm, cmap=plt.cm.Reds)
             fig.colorbar(cax)
-            ax.set_title(f"Confusion Matrix for {granularity}")
+            ax.set_title(f"Confusion Matrix for {granularity}. Share correct: {share_correct:.2f}")
             ax.set_xlabel("Predicted")
             ax.set_ylabel("True")
             ax.set_xticks(np.arange(num_classes))
             ax.set_yticks(np.arange(num_classes))
-            # # Annotate each cell with its count.
-            # for i in range(num_classes):
-            #     for j in range(num_classes):
-            #         ax.text(j, i, str(cm[i, j]), ha='center', va='center', color='red')
 
             plt.savefig(f"confusion_matrix_{granularity}.png")
+            plt.clf()
+
+            cm = cm[1:, 1:]  # Remove background class
+            fig, ax = plt.subplots(figsize=(12, 10), dpi=300)
+            cax = ax.matshow(cm, cmap=plt.cm.Reds)
+            fig.colorbar(cax)
+            ax.set_title(f"Confusion Matrix for {granularity} without background. Share correct: {share_correct:.2f}")
+            ax.set_xlabel("Predicted")
+            ax.set_ylabel("True")
+            ax.set_xticks(np.arange(num_classes))
+            ax.set_yticks(np.arange(num_classes))
+
+            plt.savefig(f"confusion_matrix_{granularity}_no_bg.png")
             plt.clf()
         # Reset the stored predictions and targets.
         self.test_preds = {g: [] for g in self.granularities}

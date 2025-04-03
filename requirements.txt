@@ -2,6 +2,7 @@ torch~=2.5.1
 torchmetrics~=1.6.1
 matplotlib~=3.10.0
 numpy~=2.0.1
+scikit-learn~=1.6.1
 transformers~=4.48.1
 pillow~=11.1.0
 tqdm~=4.66.5
