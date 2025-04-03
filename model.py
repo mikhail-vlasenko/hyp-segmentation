@@ -180,10 +180,13 @@ class SegformerLightningModule(L.LightningModule):
             num_classes = num_labels_for_granularity(granularity)
             # Compute confusion matrix. Ensure that all classes are represented.
             cm = confusion_matrix(targets, preds, labels=list(range(num_classes)))
+            cm = np.log1p(cm)  # Apply log1p to avoid log(0)
+            # set diagonal to 0
+            np.fill_diagonal(cm, 0)
 
             # Create a figure for the confusion matrix.
             fig, ax = plt.subplots(figsize=(12, 10), dpi=300)
-            cax = ax.matshow(cm, cmap=plt.cm.Blues)
+            cax = ax.matshow(cm, cmap=plt.cm.Reds)
             fig.colorbar(cax)
             ax.set_title(f"Confusion Matrix for {granularity}")
             ax.set_xlabel("Predicted")

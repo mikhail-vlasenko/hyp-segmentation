@@ -22,7 +22,7 @@ def parse_args():
     parser.add_argument("--embeddings_path", type=str, default=None, help="Path to the embeddings file")
     parser.add_argument("--tau", type=float, default=10., help="Temperature parameter for class separation with prototypes in hyperbolic space")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
-    parser.add_argument("--num_epochs", type=int, default=1, help="Number of epochs")
+    parser.add_argument("--num_epochs", type=int, default=10, help="Number of epochs")
     parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate")
     parser.add_argument("--background_loss_weight", type=float, default=0.01, help="Weight for the background class in the cross-entropy loss")
     parser.add_argument("--focal_loss", action="store_true", help="Use focal loss for training instead of cross-entropy")
@@ -33,6 +33,8 @@ def parse_args():
     parser.add_argument("--num_workers", type=int, default=4, help="Number of workers for data loading")
     parser.add_argument("--accumulate_grad_batches", type=int, default=1,
                         help="Accumulate gradient batches before updating weights")
+    parser.add_argument("--model_file", type=str, default=None,
+                        help="Path to the model file to load")
     return parser.parse_args()
 
 
@@ -61,46 +63,56 @@ def main():
         num_workers=args.num_workers,
     )
 
-    segformer_module = SegformerLightningModule(
-        model_name=args.model_name,
-        lr=args.learning_rate,
-        granularities=granularities,
-        head_dim=args.head_dim,
-        hyperbolic=args.hyperbolic,
-        curvature=args.curvature,
-        max_class_sep=args.max_class_sep,
-        tau=args.tau,
-        background_loss_weight=args.background_loss_weight,
-        focal_loss=args.focal_loss,
-        focal_loss_gamma=args.focal_loss_gamma,
-        embeddings_path=args.embeddings_path,
-    )
+    if args.model_file:
+        segformer_module = SegformerLightningModule.load_from_checkpoint(args.model_file)
+        print(f"Loaded model from {args.model_file}")
+    else:
+        segformer_module = SegformerLightningModule(
+            model_name=args.model_name,
+            lr=args.learning_rate,
+            granularities=granularities,
+            head_dim=args.head_dim,
+            hyperbolic=args.hyperbolic,
+            curvature=args.curvature,
+            max_class_sep=args.max_class_sep,
+            tau=args.tau,
+            background_loss_weight=args.background_loss_weight,
+            focal_loss=args.focal_loss,
+            focal_loss_gamma=args.focal_loss_gamma,
+            embeddings_path=args.embeddings_path,
+        )
 
-    wandb_logger = WandbLogger(
-        project="hyperbolic-segmentation",
-        log_model=True,
-    )
+    if not args.model_file:
+        wandb_logger = WandbLogger(
+            project="hyperbolic-segmentation",
+            log_model=True,
+        )
 
-    wandb_logger.log_hyperparams(vars(args))
+        wandb_logger.log_hyperparams(vars(args))
 
-    trainer = L.Trainer(
-        logger=wandb_logger,
-        max_epochs=args.num_epochs,
-        accelerator="auto",
-        devices="auto",
-        accumulate_grad_batches=args.accumulate_grad_batches,
-    )
+        trainer = L.Trainer(
+            logger=wandb_logger,
+            max_epochs=args.num_epochs,
+            accelerator="auto",
+            devices="auto",
+            accumulate_grad_batches=args.accumulate_grad_batches,
+        )
 
-    trainer.fit(segformer_module, spin_dm)
+        trainer.fit(segformer_module, spin_dm)
+        trainer.test(segformer_module, spin_dm)
 
-    trainer.test(segformer_module, spin_dm)
+        save_dir = "segformer-finetuned-spin"
+        os.makedirs(save_dir, exist_ok=True)
 
-    save_dir = "segformer-finetuned-spin"
-    os.makedirs(save_dir, exist_ok=True)
-
-    segformer_module.model.save_pretrained(save_dir)
-    processor.save_pretrained(save_dir)
-    wandb_logger.experiment.finish()
+        segformer_module.model.save_pretrained(save_dir)
+        processor.save_pretrained(save_dir)
+        wandb_logger.experiment.finish()
+    else:
+        trainer = L.Trainer(
+            accelerator="auto",
+            devices="auto",
+        )
+        trainer.test(segformer_module, spin_dm)
 
 
 if __name__ == "__main__":

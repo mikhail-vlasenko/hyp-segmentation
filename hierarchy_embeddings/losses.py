@@ -19,7 +19,7 @@ def distortion_loss(
     """
     manifold = embeddings.manifold
     embedding_dists = manifold.dist(x=embeddings[:, :, 0, :], y=embeddings[:, :, 1, :])
-    losses = (embedding_dists - dist_targets).abs() / dist_targets
+    losses = ((embedding_dists - dist_targets).abs() / dist_targets)
     return losses.mean()
 
 
