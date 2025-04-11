@@ -4,10 +4,11 @@ import os
 import networkx as nx
 
 
-def load_hierarchy(dataset: str, hierarchy_name: str) -> nx.DiGraph:
-    hierarchy_dir = os.path.dirname(os.path.abspath(__file__))
-    file = os.path.join(hierarchy_dir, dataset, f"{hierarchy_name}.json")
-    with open(file) as f:
+def load_hierarchy(dataset: str, hierarchy_name: str, file_path=None) -> nx.DiGraph:
+    if file_path is None:
+        hierarchy_dir = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(hierarchy_dir, dataset, f"{hierarchy_name}.json")
+    with open(file_path) as f:
         hierarchy_data = json.load(f)
 
     return nx.node_link_graph(hierarchy_data)

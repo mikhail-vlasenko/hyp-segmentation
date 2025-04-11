@@ -18,6 +18,7 @@ def compute_distance_matrix(graph: nx.DiGraph):
         nodes (list): List of nodes in the graph corresponding to the indices in dist_matrix.
     """
     nodes = list(graph.nodes())
+    nodes.sort()
     num_nodes = len(nodes)
     # Initialize matrix with infinity for unreachable pairs.
     dist_matrix = torch.full((num_nodes, num_nodes), float('inf'))
@@ -50,13 +51,27 @@ class GraphDistanceSoftIoU(nn.Module):
         super(GraphDistanceSoftIoU, self).__init__()
         # Register the precomputed distance matrix as a buffer.
         self.register_buffer("distance_matrix", distance_matrix)
+
+        self.num_classes = distance_matrix.shape[0]
         # Use a decay function that converts distances to similarity scores.
         if decay_fn is None:
             self.decay_fn = lambda d: 1.0 / (1.0 + d)
         else:
             self.decay_fn = decay_fn
+        self.iou_list = []
 
-    def forward(self, preds: torch.Tensor, targets: torch.Tensor, num_classes: int) -> torch.Tensor:
+    def compute(self):
+        # mIoU is the average IoU over classes that are present.
+        if len(self.iou_list) == 0:
+            return 0
+        mIoU = sum(self.iou_list) / len(self.iou_list)
+        # Reset the list for the next computation.
+        return mIoU
+
+    def reset(self):
+        self.iou_list = []
+
+    def update(self, preds: torch.Tensor, targets: torch.Tensor):
         """
         Computes a graph-distance–aware mIoU.
 
@@ -75,9 +90,8 @@ class GraphDistanceSoftIoU(nn.Module):
         Returns:
             torch.Tensor: The distance-aware mIoU.
         """
-        iou_list = []
         # Loop over each class to compute a soft IoU.
-        for c in range(num_classes):
+        for c in range(self.num_classes):
             # Create a binary mask for ground truth pixels belonging to class c.
             target_mask = (targets == c).float()
 
@@ -100,13 +114,7 @@ class GraphDistanceSoftIoU(nn.Module):
             # If there is any area in the union, compute IoU for class c.
             if union > 0:
                 iou_c = soft_intersection / union
-                iou_list.append(iou_c)
-
-        # mIoU is the average IoU over classes that are present.
-        if len(iou_list) == 0:
-            return torch.tensor(0.0, device=preds.device)
-        mIoU = sum(iou_list) / len(iou_list)
-        return mIoU
+                self.iou_list.append(iou_c)
 
 
 # def _jaccard_index_reduce(

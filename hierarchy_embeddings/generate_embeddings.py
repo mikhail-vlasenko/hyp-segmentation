@@ -93,7 +93,8 @@ def get_arg_parser():
 
 if __name__ == "__main__":
     args = get_arg_parser()
-    args.epochs = 5000
+    args.epochs = 0
+    args.pretrain_epochs = 5000
 
     # Load the hierarchy and wrap a dataset around it
     hierarchy = load_hierarchy(dataset=args.dataset, hierarchy_name=args.hierarchy_name)

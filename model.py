@@ -14,7 +14,8 @@ from focal_loss.focal_loss import FocalLoss
 
 from torchmetrics.classification import MulticlassJaccardIndex
 
-
+from hierarchy_embeddings.utils import load_hierarchy
+from metric import GraphDistanceSoftIoU, compute_distance_matrix
 from prototypes import create_prototypes
 from segformer_head import HyperbolicSegformerDecodeHead
 from utils import num_labels_for_granularity, background_class_for_granularity
@@ -79,7 +80,8 @@ class SegformerLightningModule(L.LightningModule):
             )
             for g in self.granularities
         })
-        # self.hierarchical_jaccards = nn.ModuleDict({})
+        self.hierarchical_metrics = self.configure_hierarchical_metrics()
+
         # Prepare containers for test predictions and targets.
         self.test_preds = {g: [] for g in self.granularities}
         self.test_targets = {g: [] for g in self.granularities}
@@ -153,6 +155,7 @@ class SegformerLightningModule(L.LightningModule):
             eval_loss += result["loss"]
             self.jaccards[granularity].update(result["preds"], labels)
             self.no_bg_jaccards[granularity].update(result["preds"], labels)
+            self.hierarchical_metrics[granularity].update(result["preds"], labels)
             if save_preds:
                 self.test_preds[granularity].append(result["preds"].detach().cpu())
                 self.test_targets[granularity].append(labels.detach().cpu())
@@ -196,19 +199,6 @@ class SegformerLightningModule(L.LightningModule):
 
             plt.savefig(f"confusion_matrix_{granularity}.png")
             plt.clf()
-
-            cm = cm[1:, 1:]  # Remove background class
-            fig, ax = plt.subplots(figsize=(12, 10), dpi=300)
-            cax = ax.matshow(cm, cmap=plt.cm.Reds)
-            fig.colorbar(cax)
-            ax.set_title(f"Confusion Matrix for {granularity} without background. Share correct: {share_correct:.2f}")
-            ax.set_xlabel("Predicted")
-            ax.set_ylabel("True")
-            ax.set_xticks(np.arange(num_classes))
-            ax.set_yticks(np.arange(num_classes))
-
-            plt.savefig(f"confusion_matrix_{granularity}_no_bg.png")
-            plt.clf()
         # Reset the stored predictions and targets.
         self.test_preds = {g: [] for g in self.granularities}
         self.test_targets = {g: [] for g in self.granularities}
@@ -217,10 +207,13 @@ class SegformerLightningModule(L.LightningModule):
         for granularity in self.granularities:
             metric = self.jaccards[granularity]
             no_bg_metric = self.no_bg_jaccards[granularity]
+            hierarchical_metric = self.hierarchical_metrics[granularity]
             self.log(f"{prefix}_mIoU_{granularity}", metric.compute(), prog_bar=True)
             self.log(f"{prefix}_mIoU_no_bg_{granularity}", no_bg_metric.compute(), prog_bar=True)
+            self.log(f"{prefix}_hierarchical_mIoU_{granularity}", hierarchical_metric.compute(), prog_bar=True)
             metric.reset()
             no_bg_metric.reset()
+            hierarchical_metric.reset()
 
     def on_validation_epoch_end(self):
         self.on_eval_epoch_end("val")
@@ -228,3 +221,36 @@ class SegformerLightningModule(L.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
         return optimizer
+
+    @staticmethod
+    def configure_hierarchical_metrics():
+        hierarchy = load_hierarchy(None, None, "hierarchy_embeddings/spin_dataset/spin_hierarchy.json")
+        dist_matrix, node_list = compute_distance_matrix(hierarchy)
+        obj_dist_mat = dist_matrix[205:216, 205:216]
+
+        def add_bg(some_dist_mat, start, end):
+            # add the background class (0) to the object distance matrix.
+            bg_to_obj = dist_matrix[0, start:end]
+            some_dist_mat = torch.cat([bg_to_obj.unsqueeze(0), some_dist_mat], dim=0)
+            obj_to_bg = dist_matrix[start:end, 0]
+            with_bg_to_bg = torch.cat([dist_matrix[0, 0].unsqueeze(0), obj_to_bg], dim=0)
+            some_dist_mat = torch.cat([with_bg_to_bg.unsqueeze(1), some_dist_mat], dim=1)
+            return some_dist_mat
+
+        obj_dist_mat = add_bg(obj_dist_mat, 205, 216)
+        # save as image for debugging
+        # import matplotlib.pyplot as plt
+        # plt.imshow(obj_dist_mat.cpu().numpy())
+        # plt.colorbar()
+        # plt.title("Object distance matrix")
+        # plt.savefig("obj_dist_mat.png")
+        # plt.clf()
+
+        part_dist_mat = dist_matrix[216:256, 216:256]
+        part_dist_mat = add_bg(part_dist_mat, 216, 256)
+        subpart_dist_mat = dist_matrix[0:204, 0:204]
+        return nn.ModuleDict({
+            "whole": GraphDistanceSoftIoU(obj_dist_mat),
+            "part": GraphDistanceSoftIoU(part_dist_mat),
+            "subpart": GraphDistanceSoftIoU(subpart_dist_mat),
+        })
