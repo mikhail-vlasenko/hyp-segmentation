@@ -48,9 +48,9 @@ class Synthetic2DClassificationDataset(Dataset):
 
 
 class SmallNet(nn.Module):
-    def __init__(self, c=1.0, tau=1.0, num_classes=3, hidden_dim=4, out_dim=2, prototypes=None):
+    def __init__(self, hyperbolic, c=1.0, tau=1.0, num_classes=3, hidden_dim=4, out_dim=2, prototypes=None):
         super().__init__()
-        self.hyperbolic = prototypes is not None
+        self.hyperbolic = hyperbolic
         self.c = torch.tensor(c)
         self.tau = tau
         self.num_classes = num_classes
@@ -62,12 +62,18 @@ class SmallNet(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, self.out_dim)
         )
+        self.prototypes = prototypes
+        if self.prototypes is not None:
+            num_classes = self.prototypes.shape[1]
+
+        self.classifier = nn.Linear(self.out_dim, num_classes)
+        # hyperbolic without prototypes is not supported
+        assert not (self.hyperbolic and self.prototypes is None), "Hyperbolic model requires prototypes."
+
         if self.hyperbolic:
-            print("Using hyperbolic prototypical learning.")
-            self.prototypes = prototypes
-            self.ball = PoincareBall(c=self.c)
-        else:
-            self.classifier = nn.Linear(self.out_dim, num_classes)
+            self.prototypes = self.prototypes.unsqueeze(1) * 0.95
+
+        self.ball = PoincareBall(c=self.c)
 
     def forward(self, x, return_repr=False):
         """
@@ -79,6 +85,7 @@ class SmallNet(nn.Module):
         """
         hidden = self.encoder(x)  # shape: (batch, hidden_dim)
         if self.hyperbolic:
+            hidden = self.classifier(hidden)
             # Map Euclidean features to the hyperbolic space.
             rep = self.ball.expmap0(hidden)
             # Compute hyperbolic distances to prototypes.
@@ -87,13 +94,15 @@ class SmallNet(nn.Module):
             logits = - self.tau * distances
         else:
             logits = self.classifier(hidden)
+            if self.prototypes is not None:
+                logits = torch.einsum("bc,nc->bn", logits, self.prototypes)
             rep = hidden
         if return_repr:
             return logits, rep
         return logits
 
 
-def train_model(model, dataloader, num_epochs=10, lr=1e-3, device="cpu"):
+def train_model(model, dataloader, num_epochs=20, lr=1e-3, device="cpu"):
     model = model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
@@ -130,27 +139,31 @@ def make_prototypes(close_prototypes):
 
     prototypes = torch.tensor([
         [np.cos(angle), np.sin(angle)] for angle in angles
-    ], dtype=torch.float32).unsqueeze(1)  # Shape: (num_classes, 1, out_dim)
-    prototypes = 0.95 * prototypes  # Scale prototypes to be inside the Poincaré ball.
+    ], dtype=torch.float32)  # Shape: (num_classes, out_dim)
     return prototypes
 
-def evaluate_model(dataloader, hyperbolic, close_prototypes=True):
+def evaluate_configuration(hyperbolic, use_prototypes, close_prototypes=True):
+    dataset = Synthetic2DClassificationDataset(n_samples_per_class=1000)
+    dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
     prototypes = make_prototypes(close_prototypes)
 
     accs = []
-    for i in range(10):
+    for i in range(NUM_RUNS):
         model = SmallNet(
+            hyperbolic=hyperbolic,
             c=1.0,
             tau=15.0,
-            prototypes=prototypes if hyperbolic else None,
+            prototypes=prototypes if use_prototypes else None,
         )
 
-        accuracy = train_model(model, dataloader, num_epochs=20, lr=1e-3)
+        accuracy = train_model(model, dataloader, lr=1e-3)
         accs.append(accuracy)
 
-    prefix = f"Hyperbolic Prototypical (A and B are {'close' if close_prototypes else 'far'})" if hyperbolic else "Euclidean"
+    prefix = f"Hyperbolic" if hyperbolic else "Euclidean"
+    prefix += f" Prototypical (A and B are {'close' if close_prototypes else 'far'})" if use_prototypes else ""
     title = f"{prefix}. Acc = {np.mean(accs):.3f}+-{np.std(accs, ddof=1):.4f}"
     print(title)
+    return np.mean(accs), np.std(accs, ddof=1)
 
 def plot_decision_boundary(model, dataset, hyperbolic, accuracy, close_prototypes, device="cpu"):
     model.eval()
@@ -204,7 +217,6 @@ def plot_dataset_with_prototype_versions(dataset, device="cpu"):
         circle_x = np.cos(theta)
         circle_y = np.sin(theta)
         ax.plot(circle_x, circle_y, color="gray", linestyle="--")
-        # Use the same colormap as above for the prototypes.
         if prototypes.dim() == 3:
             prototypes_mod = prototypes.squeeze(1)
         else:
@@ -240,16 +252,68 @@ def plot_dataset_with_prototype_versions(dataset, device="cpu"):
 
 
 if __name__ == "__main__":
+    NUM_RUNS = 20
     seed_everything(42)
-    # Create the synthetic dataset and DataLoader.
+
     dataset = Synthetic2DClassificationDataset(n_samples_per_class=1000)
     dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
-
     plot_dataset_with_prototype_versions(dataset)
 
-    evaluate_model(dataloader, hyperbolic=True, close_prototypes=True)
-    evaluate_model(dataloader, hyperbolic=True, close_prototypes=False)
-    evaluate_model(dataloader, hyperbolic=False)
+    results = []
+
+    mean, std = evaluate_configuration(hyperbolic=True, use_prototypes=True, close_prototypes=True)
+    results.append({
+        "Method": "Hyp, CLOSE",
+        "Mean": mean,
+        "Std": std
+    })
+
+    mean, std = evaluate_configuration(hyperbolic=True, use_prototypes=True, close_prototypes=False)
+    results.append({
+        "Method": "Hyp, FAR",
+        "Mean": mean,
+        "Std": std
+    })
+
+    mean, std = evaluate_configuration(hyperbolic=False, use_prototypes=True, close_prototypes=True)
+    results.append({
+        "Method": "Euc, CLOSE",
+        "Mean": mean,
+        "Std": std
+    })
+
+    mean, std = evaluate_configuration(hyperbolic=False, use_prototypes=True, close_prototypes=False)
+    results.append({
+        "Method": "Euc, FAR",
+        "Mean": mean,
+        "Std": std
+    })
+
+    mean, std = evaluate_configuration(hyperbolic=False, use_prototypes=False)
+    results.append({
+        "Method": "Euc, BASELINE",
+        "Mean": mean,
+        "Std": std
+    })
+
+    # Create a DataFrame with the results.
+    df = pd.DataFrame(results)
+
+    # Create the bar plot.
+    plt.figure(figsize=(10, 6), dpi=200)
+    ax = sns.barplot(x="Method", y="Mean", data=df)
+
+    # Add error bars using matplotlib.
+    for idx, row in df.iterrows():
+        ax.errorbar(idx, row["Mean"], yerr=row["Std"], fmt='none', c='black', capsize=5)
+
+    # Customize labels and rotation for clarity.
+    plt.title("Evaluation of Configurations")
+    plt.ylabel("Accuracy")
+    plt.xlabel("Method")
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    plt.savefig("synthetic_results_bar_chart.png")
 
     # Visualize the decision boundaries.
     # plot_decision_boundary(model, dataset, hyperbolic=True, accuracy=accuracy, close_prototypes=close_prototypes)
