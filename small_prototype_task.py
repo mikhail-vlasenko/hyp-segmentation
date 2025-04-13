@@ -1,0 +1,255 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+from geoopt import PoincareBall
+from lightning import seed_everything
+from torch.utils.data import Dataset, DataLoader
+import seaborn as sns
+import matplotlib.cm as cm
+import pandas as pd
+
+from hyperbolic_layers import fast_dist
+
+
+class Synthetic2DClassificationDataset(Dataset):
+    def __init__(self, n_samples_per_class=1000):
+        # Means for 3 classes: classes 0 and 1 are close, class 2 is separated.
+        self.means = torch.tensor([
+            [0.0, 0.0],  # Class 0
+            [0.5, 0.5],  # Class 1 (very similar to Class 0)
+            [5.0, 5.0]  # Class 2 (well separated)
+        ], dtype=torch.float32)
+
+        # Covariance matrices for each Gaussian
+        self.covariances = torch.tensor([
+            [[0.1, 0.0], [0.0, 0.1]],
+            [[0.1, 0.0], [0.0, 0.1]],
+            [[0.1, 0.0], [0.0, 0.1]]
+        ], dtype=torch.float32)
+
+        data = []
+        labels = []
+        for label, (mean, cov) in enumerate(zip(self.means, self.covariances)):
+            dist = torch.distributions.MultivariateNormal(mean, covariance_matrix=cov)
+            samples = dist.sample((n_samples_per_class,))
+            data.append(samples)
+            labels.append(torch.full((n_samples_per_class,), label, dtype=torch.long))
+        self.data = torch.cat(data, dim=0)
+        self.labels = torch.cat(labels, dim=0)
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        return self.data[idx], self.labels[idx]
+
+
+class SmallNet(nn.Module):
+    def __init__(self, c=1.0, tau=1.0, num_classes=3, hidden_dim=4, out_dim=2, prototypes=None):
+        super().__init__()
+        self.hyperbolic = prototypes is not None
+        self.c = torch.tensor(c)
+        self.tau = tau
+        self.num_classes = num_classes
+        self.out_dim = out_dim
+
+        # A simple MLP encoder
+        self.encoder = nn.Sequential(
+            nn.Linear(2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, self.out_dim)
+        )
+        if self.hyperbolic:
+            print("Using hyperbolic prototypical learning.")
+            self.prototypes = prototypes
+            self.ball = PoincareBall(c=self.c)
+        else:
+            self.classifier = nn.Linear(self.out_dim, num_classes)
+
+    def forward(self, x, return_repr=False):
+        """
+        Args:
+            x: input tensor of shape (batch_size, 2)
+            return_repr: if True, also return the learned representation.
+        Returns:
+            logits: unnormalized log-probabilities for each class.
+        """
+        hidden = self.encoder(x)  # shape: (batch, hidden_dim)
+        if self.hyperbolic:
+            # Map Euclidean features to the hyperbolic space.
+            rep = self.ball.expmap0(hidden)
+            # Compute hyperbolic distances to prototypes.
+            distances = fast_dist(rep, self.prototypes, self.c).T
+            # Lower distance should mean a higher logit; hence, we use negative distances.
+            logits = - self.tau * distances
+        else:
+            logits = self.classifier(hidden)
+            rep = hidden
+        if return_repr:
+            return logits, rep
+        return logits
+
+
+def train_model(model, dataloader, num_epochs=10, lr=1e-3, device="cpu"):
+    model = model.to(device)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    criterion = nn.CrossEntropyLoss()
+    epoch_acc = 0.0
+    for epoch in range(num_epochs):
+        model.train()
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        for inputs, labels in dataloader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            optimizer.zero_grad()
+            logits = model(inputs)
+            loss = criterion(logits, labels)
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item() * inputs.size(0)
+            preds = torch.argmax(logits, dim=1)
+            correct += (preds == labels).sum().item()
+            total += inputs.size(0)
+        epoch_loss = running_loss / total
+        epoch_acc = correct / total
+        # print(f"Epoch {epoch + 1}/{num_epochs}: Loss={epoch_loss:.4f}, Accuracy={epoch_acc:.4f}")
+    return epoch_acc
+
+def make_prototypes(close_prototypes):
+    if close_prototypes:
+        # A and B are close, C is far away.
+        angles = [0, np.pi / 20, np.pi]
+    else:
+        # Equally spaced prototypes in the Poincaré ball.
+        angles = [0, 2 * np.pi / 3, 4 * np.pi / 3]
+
+    prototypes = torch.tensor([
+        [np.cos(angle), np.sin(angle)] for angle in angles
+    ], dtype=torch.float32).unsqueeze(1)  # Shape: (num_classes, 1, out_dim)
+    prototypes = 0.95 * prototypes  # Scale prototypes to be inside the Poincaré ball.
+    return prototypes
+
+def evaluate_model(dataloader, hyperbolic, close_prototypes=True):
+    prototypes = make_prototypes(close_prototypes)
+
+    accs = []
+    for i in range(10):
+        model = SmallNet(
+            c=1.0,
+            tau=15.0,
+            prototypes=prototypes if hyperbolic else None,
+        )
+
+        accuracy = train_model(model, dataloader, num_epochs=20, lr=1e-3)
+        accs.append(accuracy)
+
+    prefix = f"Hyperbolic Prototypical (A and B are {'close' if close_prototypes else 'far'})" if hyperbolic else "Euclidean"
+    title = f"{prefix}. Acc = {np.mean(accs):.3f}+-{np.std(accs, ddof=1):.4f}"
+    print(title)
+
+def plot_decision_boundary(model, dataset, hyperbolic, accuracy, close_prototypes, device="cpu"):
+    model.eval()
+    # Create a grid of points covering the data domain.
+    x_min, x_max = dataset.data[:, 0].min() - 1, dataset.data[:, 0].max() + 1
+    y_min, y_max = dataset.data[:, 1].min() - 1, dataset.data[:, 1].max() + 1
+    xx, yy = np.meshgrid(np.linspace(x_min, x_max, 200),
+                         np.linspace(y_min, y_max, 200))
+    grid = torch.tensor(np.c_[xx.ravel(), yy.ravel()]).float().to(device)
+    with torch.no_grad():
+        logits = model(grid)
+        preds = torch.argmax(logits, dim=1).reshape(xx.shape)
+    plt.figure(figsize=(8, 8), dpi=100)
+    plt.contourf(xx, yy, preds.cpu().numpy(), alpha=0.3, cmap="coolwarm")
+    plt.scatter(dataset.data[:, 0], dataset.data[:, 1], c=dataset.labels, edgecolors="k", cmap="coolwarm")
+
+    plt.xlabel("x1")
+    plt.ylabel("x2")
+    plt.show()
+
+
+def plot_dataset_with_prototype_versions(dataset, device="cpu"):
+    sns.set(style="whitegrid")
+
+    # Generate prototypes for both cases using the provided function.
+    prototypes_close = make_prototypes(close_prototypes=True)
+    prototypes_far = make_prototypes(close_prototypes=False)
+
+    # Convert dataset tensors to NumPy arrays.
+    data = dataset.data.cpu().detach().numpy()
+    labels = dataset.labels.cpu().detach().numpy()
+
+    # Prepare a figure with 1 row and 3 columns.
+    fig, axs = plt.subplots(1, 3, figsize=(18, 6), dpi=200)
+
+    num_classes = int(np.max(labels)) + 1
+    cmap = cm.get_cmap("Accent", num_classes)
+    colors = [cmap(i) for i in range(num_classes)]
+
+    # Subplot 1: Plot the dataset.
+    scatter = axs[0].scatter(data[:, 0], data[:, 1], c=labels, cmap="Accent", edgecolors="k", alpha=0.6)
+    axs[0].set_title("Dataset")
+    axs[0].set_xlabel("x1")
+    axs[0].set_ylabel("x2")
+
+    # Function to draw a disk (unit circle) and the prototypes as vectors from the origin,
+    # colored according to class.
+    def plot_prototypes(ax, prototypes, title):
+        # Draw a circle representing the unit disk (Poincaré ball).
+        theta = np.linspace(0, 2 * np.pi, 400)
+        circle_x = np.cos(theta)
+        circle_y = np.sin(theta)
+        ax.plot(circle_x, circle_y, color="gray", linestyle="--")
+        # Use the same colormap as above for the prototypes.
+        if prototypes.dim() == 3:
+            prototypes_mod = prototypes.squeeze(1)
+        else:
+            prototypes_mod = prototypes
+        prototypes_np = prototypes_mod.cpu().detach().numpy()
+        # Draw arrows using annotate with increased line width for brightness.
+        for idx, proto in enumerate(prototypes_np):
+            ax.annotate(
+                '',
+                xy=(proto[0], proto[1]),
+                xytext=(0, 0),
+                arrowprops=dict(
+                    arrowstyle='->',
+                    color=colors[idx],
+                    lw=3
+                )
+            )
+        ax.set_xlim(-1.1, 1.1)
+        ax.set_ylim(-1.1, 1.1)
+        ax.set_aspect('equal', 'box')
+        ax.set_title(title)
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+
+    # Subplot 2: Plot the 'Close Prototypes' on a disk.
+    plot_prototypes(axs[1], prototypes_close, "Close Prototypes")
+
+    # Subplot 3: Plot the 'Far Prototypes' on a disk.
+    plot_prototypes(axs[2], prototypes_far, "Far Prototypes")
+
+    plt.tight_layout()
+    plt.savefig("synthetic_dataset_with_prototypes.png")
+
+
+if __name__ == "__main__":
+    seed_everything(42)
+    # Create the synthetic dataset and DataLoader.
+    dataset = Synthetic2DClassificationDataset(n_samples_per_class=1000)
+    dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
+
+    plot_dataset_with_prototype_versions(dataset)
+
+    evaluate_model(dataloader, hyperbolic=True, close_prototypes=True)
+    evaluate_model(dataloader, hyperbolic=True, close_prototypes=False)
+    evaluate_model(dataloader, hyperbolic=False)
+
+    # Visualize the decision boundaries.
+    # plot_decision_boundary(model, dataset, hyperbolic=True, accuracy=accuracy, close_prototypes=close_prototypes)
