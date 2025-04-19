@@ -90,6 +90,7 @@ class SmallNet(nn.Module):
             rep = self.ball.expmap0(hidden)
             # Compute hyperbolic distances to prototypes.
             distances = fast_dist(rep, self.prototypes, self.c).T
+            assert not torch.isnan(distances).any()
             # Lower distance should mean a higher logit; hence, we use negative distances.
             logits = - self.tau * distances
         else:
@@ -102,14 +103,17 @@ class SmallNet(nn.Module):
         return logits
 
 
-def train_model(model, dataloader, num_epochs=20, lr=1e-3, device="cpu"):
+def train_model(model, dataloader, num_epochs=50, lr=1e-3, device="cpu"):
     model = model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
     epoch_acc = 0.0
+    losses_per_epoch = []
+    new_losses_per_epoch = []
     for epoch in range(num_epochs):
         model.train()
         running_loss = 0.0
+        new_running_loss = 0.0
         correct = 0
         total = 0
         for inputs, labels in dataloader:
@@ -117,6 +121,29 @@ def train_model(model, dataloader, num_epochs=20, lr=1e-3, device="cpu"):
             optimizer.zero_grad()
             logits = model(inputs)
             loss = criterion(logits, labels)
+            if model.prototypes is not None:
+                # if model.hyperbolic:
+                #     # Use the hyperbolic distance to the prototypes as logits.
+                distances = -logits
+                additional_loss_weight = 1
+                # add a loss term that is (dist to correct)/(dist to closest incorrect)
+                batch_size = inputs.size(0)
+                correct_dists = distances[torch.arange(batch_size), labels]
+                # Create a mask to select distances corresponding to incorrect prototypes.
+                mask = torch.ones_like(distances, dtype=torch.bool)
+                mask[torch.arange(batch_size), labels] = False
+                # Find, for each sample, the minimum distance among incorrect prototypes.
+                min_incorrect = distances.masked_select(mask).view(batch_size, -1).min(dim=1)[0]
+                eps = 1e-4  # small value to prevent division by zero
+                min_incorrect = torch.max(min_incorrect, torch.full_like(min_incorrect, eps))
+                correct_dists = torch.max((correct_dists * 2) - min_incorrect, torch.full_like(min_incorrect, 0))
+                # Compute the ratio loss: lower when the correct distance is much smaller than the best incorrect distance.
+                ratio_loss = (correct_dists / min_incorrect)
+                ratio_loss = torch.mean(ratio_loss)
+                assert not torch.isnan(ratio_loss)
+                new_running_loss += ratio_loss.item() * inputs.size(0)
+                # Add the additional loss to the cross-entropy loss.
+                loss += additional_loss_weight * ratio_loss
             loss.backward()
             optimizer.step()
 
@@ -126,8 +153,10 @@ def train_model(model, dataloader, num_epochs=20, lr=1e-3, device="cpu"):
             total += inputs.size(0)
         epoch_loss = running_loss / total
         epoch_acc = correct / total
+        losses_per_epoch.append(epoch_loss)
+        new_losses_per_epoch.append(new_running_loss / total)
         # print(f"Epoch {epoch + 1}/{num_epochs}: Loss={epoch_loss:.4f}, Accuracy={epoch_acc:.4f}")
-    return epoch_acc
+    return epoch_acc, losses_per_epoch, new_losses_per_epoch
 
 def make_prototypes(close_prototypes):
     if close_prototypes:
@@ -146,6 +175,7 @@ def evaluate_configuration(hyperbolic, use_prototypes, close_prototypes=True):
     dataset = Synthetic2DClassificationDataset(n_samples_per_class=1000)
     dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
     prototypes = make_prototypes(close_prototypes)
+    losses1, losses2 = [], []
 
     accs = []
     for i in range(NUM_RUNS):
@@ -156,9 +186,19 @@ def evaluate_configuration(hyperbolic, use_prototypes, close_prototypes=True):
             prototypes=prototypes if use_prototypes else None,
         )
 
-        accuracy = train_model(model, dataloader, lr=1e-3)
+        accuracy, losses_per_epoch, new_losses_per_epoch = train_model(model, dataloader)
         accs.append(accuracy)
+        losses1.append(losses_per_epoch)
+        losses2.append(new_losses_per_epoch)
 
+    plt.figure(figsize=(8, 6), dpi=200)
+    plt.plot(np.array(losses1).mean(0), label="Cross-Entropy Loss")
+    plt.plot(np.array(losses2).mean(0), label="Ratio Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title(f"Losses per Epoch. {hyperbolic=}, {use_prototypes=}, {close_prototypes=}")
+    plt.legend()
+    plt.savefig(f"plots/losses_{hyperbolic}_{use_prototypes}_{close_prototypes}.png")
     prefix = f"Hyperbolic" if hyperbolic else "Euclidean"
     prefix += f" Prototypical (A and B are {'close' if close_prototypes else 'far'})" if use_prototypes else ""
     title = f"{prefix}. Acc = {np.mean(accs):.3f}+-{np.std(accs, ddof=1):.4f}"
@@ -252,12 +292,11 @@ def plot_dataset_with_prototype_versions(dataset, device="cpu"):
 
 
 if __name__ == "__main__":
-    NUM_RUNS = 20
+    NUM_RUNS = 10
     seed_everything(42)
 
     dataset = Synthetic2DClassificationDataset(n_samples_per_class=1000)
-    dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
-    plot_dataset_with_prototype_versions(dataset)
+    # plot_dataset_with_prototype_versions(dataset)
 
     results = []
 
