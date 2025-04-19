@@ -86,6 +86,8 @@ def get_arg_parser():
                         help="Burn-in LR multiplier used during burn-in phase of pretraining", )
     parser.add_argument("--burn-in-epochs", type=int, default=20,
                         help="Number of epochs used for burn-in phase of pretraining", )
+    parser.add_argument("--loss-power", type=float, default=3.0,
+                        help="Power used for the distortion loss", )
 
     opt = parser.parse_args()
     return opt
@@ -93,8 +95,8 @@ def get_arg_parser():
 
 if __name__ == "__main__":
     args = get_arg_parser()
-    args.epochs = 0
-    args.pretrain_epochs = 5000
+    # args.epochs = 0
+    # args.pretrain_epochs = 5000
 
     # Load the hierarchy and wrap a dataset around it
     hierarchy = load_hierarchy(dataset=args.dataset, hierarchy_name=args.hierarchy_name)
@@ -195,6 +197,7 @@ if __name__ == "__main__":
             loss = distortion_loss(
                 embeddings=embeddings,
                 dist_targets=dist_targets,
+                power=args.loss_power,
             )
 
             if epoch % 20 == 0:

@@ -4,7 +4,7 @@ from hypll.tensors import ManifoldTensor
 
 
 def distortion_loss(
-    embeddings: ManifoldTensor, dist_targets: torch.Tensor
+    embeddings: ManifoldTensor, dist_targets: torch.Tensor, power: float = 2.0
 ) -> torch.Tensor:
     """Our own distortion loss.
 
@@ -19,7 +19,7 @@ def distortion_loss(
     """
     manifold = embeddings.manifold
     embedding_dists = manifold.dist(x=embeddings[:, :, 0, :], y=embeddings[:, :, 1, :])
-    losses = ((embedding_dists - dist_targets).abs() / dist_targets)
+    losses = ((embedding_dists - dist_targets).abs() / dist_targets).pow(power)
     return losses.mean()
 
 
