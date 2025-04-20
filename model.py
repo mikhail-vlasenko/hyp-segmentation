@@ -36,6 +36,7 @@ class SegformerLightningModule(L.LightningModule):
         focal_loss: bool = False,
         focal_loss_gamma: float = 0.7,
         embeddings_path: str = None,
+        ratio_loss_weight: float = 0.0,
     ):
         super().__init__()
         # Save all hyperparameters so they can be later accessed via self.hparams
@@ -86,6 +87,8 @@ class SegformerLightningModule(L.LightningModule):
         self.test_preds = {g: [] for g in self.granularities}
         self.test_targets = {g: [] for g in self.granularities}
 
+        self.ratio_loss_weight = ratio_loss_weight
+
     def logits_to_loss(self, logits, labels, num_classes, background_index, return_preds=False):
         # upsample logits to the images' original size
         upsampled_logits = nn.functional.interpolate(
@@ -101,6 +104,10 @@ class SegformerLightningModule(L.LightningModule):
             loss_fct = CrossEntropyLoss(weight=loss_weights)
 
         loss = loss_fct(upsampled_logits, labels)
+        if self.ratio_loss_weight > 0 and self.decode_heads[self.granularities[0]].max_class_sep:
+            loss_fct2 = PrototypeRatioLoss(weight=self.ratio_loss_weight)
+            loss += loss_fct2(upsampled_logits, labels)
+
         if return_preds:
             preds = torch.argmax(upsampled_logits, dim=-1 if self.focal_loss else 1)
             return {
@@ -254,3 +261,45 @@ class SegformerLightningModule(L.LightningModule):
             "part": GraphDistanceSoftIoU(part_dist_mat),
             "subpart": GraphDistanceSoftIoU(subpart_dist_mat),
         })
+
+
+class PrototypeRatioLoss(nn.Module):
+    def __init__(self, weight=1.0, eps=1e-4):
+        """
+        Args:
+            weight (float): Weight for the ratio loss component.
+            eps (float): Small constant to prevent division by zero.
+        """
+        super().__init__()
+        self.weight = weight
+        self.eps = eps
+
+    def forward(self, logits, labels):
+        """
+        Args:
+            logits (Tensor): Assumed to be negative distances to prototypes of shape (B, C)
+            labels (Tensor): Ground-truth class labels of shape (B,)
+        Returns:
+            loss (Tensor): The additional prototype ratio loss.
+        """
+        batch_size = logits.size(0)
+        distances = -logits  # Convert logits back to distances
+
+        correct_dists = distances[torch.arange(batch_size), labels]
+
+        # Mask to find incorrect prototype distances
+        mask = torch.ones_like(distances, dtype=torch.bool)
+        mask[torch.arange(batch_size), labels] = False
+        # Find, for each sample, the minimum distance among incorrect prototypes.
+        min_incorrect = distances.masked_select(mask).view(batch_size, -1).min(dim=1)[0]
+        min_incorrect = torch.max(min_incorrect, torch.full_like(min_incorrect, self.eps))
+
+        # Compute the ratio loss: it is lower when the correct distance is
+        #   much smaller than the best incorrect distance.
+        correct_dists = torch.max((correct_dists * 2) - min_incorrect, torch.full_like(min_incorrect, 0))
+        ratio_loss = (correct_dists / min_incorrect).mean()
+
+        if torch.isnan(ratio_loss):
+            raise ValueError("Ratio loss became NaN")
+
+        return self.weight * ratio_loss
