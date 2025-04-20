@@ -274,30 +274,49 @@ class PrototypeRatioLoss(nn.Module):
         self.weight = weight
         self.eps = eps
 
-    def forward(self, logits, labels):
+    def forward(self, logits: torch.Tensor, labels: torch.LongTensor) -> torch.Tensor:
         """
         Args:
-            logits (Tensor): Assumed to be negative distances to prototypes of shape (B, C)
-            labels (Tensor): Ground-truth class labels of shape (B,)
+            logits: Tensor of shape (B, C, *spatial), where C is the # of prototypes.
+                    These are assumed to be NEGATIVE distances to each prototype.
+            labels: LongTensor of shape (B, *spatial), with values in [0, C).
         Returns:
-            loss (Tensor): The additional prototype ratio loss.
+            A scalar tensor: the mean ratio-loss over all positions.
         """
-        batch_size = logits.size(0)
-        distances = -logits  # Convert logits back to distances
+        distances = -logits  # convert logits back to distances
 
-        correct_dists = distances[torch.arange(batch_size), labels]
+        # --- flatten all non-prototype dims into a single batch dimension ---
+        perm = [0] + list(range(2, logits.dim())) + [1]
+        distances = distances.permute(*perm).contiguous()
+        *spatial_dims, C = distances.shape
+        N = int(torch.prod(torch.tensor(spatial_dims)))  # total number of positions
 
-        # Mask to find incorrect prototype distances
-        mask = torch.ones_like(distances, dtype=torch.bool)
-        mask[torch.arange(batch_size), labels] = False
-        # Find, for each sample, the minimum distance among incorrect prototypes.
-        min_incorrect = distances.masked_select(mask).view(batch_size, -1).min(dim=1)[0]
-        min_incorrect = torch.max(min_incorrect, torch.full_like(min_incorrect, self.eps))
+        # reshape to (N, C) and (N,)
+        d_flat = distances.view(-1, C)
+        l_flat = labels.view(-1)
 
-        # Compute the ratio loss: it is lower when the correct distance is
-        #   much smaller than the best incorrect distance.
-        correct_dists = torch.max((correct_dists * 2) - min_incorrect, torch.full_like(min_incorrect, 0))
-        ratio_loss = (correct_dists / min_incorrect).mean()
+        # gather correct distances
+        idx = torch.arange(N, device=d_flat.device)
+        correct_dists = d_flat[idx, l_flat]
+
+        # build mask for incorrect prototypes
+        mask = torch.ones_like(d_flat, dtype=torch.bool)
+        mask[idx, l_flat] = False
+
+        # for each position, find min distance among incorrect prototypes
+        # masked_select gives a 1D tensor, so we view back into (N, C-1)
+        min_incorrect, _ = (
+            d_flat.masked_select(mask)
+                  .view(N, C - 1)
+                  .min(dim=1)
+        )
+        # avoid zero
+        min_incorrect = torch.clamp(min_incorrect, min=self.eps)
+
+        # compute per-position margin: max(2*correct - best-wrong, 0)
+        margin = torch.relu((correct_dists * 2) - min_incorrect)
+
+        ratio_loss = (margin / min_incorrect).mean()
 
         if torch.isnan(ratio_loss):
             raise ValueError("Ratio loss became NaN")

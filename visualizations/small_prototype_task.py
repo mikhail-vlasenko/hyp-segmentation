@@ -12,6 +12,7 @@ import matplotlib.cm as cm
 import pandas as pd
 
 from hyperbolic_layers import fast_dist
+from model import PrototypeRatioLoss
 
 
 class Synthetic2DClassificationDataset(Dataset):
@@ -122,28 +123,10 @@ def train_model(model, dataloader, num_epochs=50, lr=1e-3, device="cpu"):
             logits = model(inputs)
             loss = criterion(logits, labels)
             if model.prototypes is not None:
-                # if model.hyperbolic:
-                #     # Use the hyperbolic distance to the prototypes as logits.
-                distances = -logits
-                additional_loss_weight = 1
-                # add a loss term that is (dist to correct)/(dist to closest incorrect)
-                batch_size = inputs.size(0)
-                correct_dists = distances[torch.arange(batch_size), labels]
-                # Create a mask to select distances corresponding to incorrect prototypes.
-                mask = torch.ones_like(distances, dtype=torch.bool)
-                mask[torch.arange(batch_size), labels] = False
-                # Find, for each sample, the minimum distance among incorrect prototypes.
-                min_incorrect = distances.masked_select(mask).view(batch_size, -1).min(dim=1)[0]
-                eps = 1e-4  # small value to prevent division by zero
-                min_incorrect = torch.max(min_incorrect, torch.full_like(min_incorrect, eps))
-                correct_dists = torch.max((correct_dists * 2) - min_incorrect, torch.full_like(min_incorrect, 0))
-                # Compute the ratio loss: lower when the correct distance is much smaller than the best incorrect distance.
-                ratio_loss = (correct_dists / min_incorrect)
-                ratio_loss = torch.mean(ratio_loss)
-                assert not torch.isnan(ratio_loss)
-                new_running_loss += ratio_loss.item() * inputs.size(0)
-                # Add the additional loss to the cross-entropy loss.
-                loss += additional_loss_weight * ratio_loss
+                loss_fct = PrototypeRatioLoss(weight=1.0)
+                new_loss = loss_fct(logits, labels)
+                new_running_loss += new_loss.item() * inputs.size(0)
+                loss = loss + new_loss
             loss.backward()
             optimizer.step()
 
