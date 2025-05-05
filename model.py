@@ -7,6 +7,7 @@ import torch
 import numpy as np
 import lightning as L
 from torch import nn
+from torch.autograd import Function
 from torch.nn import CrossEntropyLoss
 
 from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
@@ -315,10 +316,38 @@ class PrototypeRatioLoss(nn.Module):
 
         # compute per-position margin: max(2*correct - best-wrong, 0)
         margin = torch.relu((correct_dists * 2) - min_incorrect)
+        ratio_loss = margin / min_incorrect
 
-        ratio_loss = (margin / min_incorrect).mean()
+        # clamp each element to max=1 with proportional gradient scaling
+        ratio_loss = ClampMaxGrad.apply(ratio_loss, 2.0)
+
+        # mean over positions
+        ratio_loss = ratio_loss.mean()
 
         if torch.isnan(ratio_loss):
             raise ValueError("Ratio loss became NaN")
 
         return self.weight * ratio_loss
+
+
+class ClampMaxGrad(Function):
+    @staticmethod
+    def forward(ctx, input, max_val):
+        # save raw input for backward
+        ctx.save_for_backward(input)
+        ctx.max_val = float(max_val)
+        # forward is hard clamp at max_val
+        return input.clamp(max=max_val)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        input, = ctx.saved_tensors
+        max_val = ctx.max_val
+        # compute factor = clamp(input, max_val) / input
+        # for input > max_val: factor = max_val / input
+        # for input <= max_val: factor = 1
+        factor = torch.where(input > max_val,
+                             max_val / input,
+                             torch.ones_like(input))
+        # scale the incoming gradient
+        return grad_output * factor, None

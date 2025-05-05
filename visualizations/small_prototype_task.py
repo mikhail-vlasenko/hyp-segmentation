@@ -6,7 +6,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from geoopt import PoincareBall
 from lightning import seed_everything
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
+import torch.nn.functional as F
 import seaborn as sns
 import matplotlib.cm as cm
 import pandas as pd
@@ -21,7 +22,7 @@ class Synthetic2DClassificationDataset(Dataset):
         self.means = torch.tensor([
             [0.0, 0.0],  # Class 0
             [0.5, 0.5],  # Class 1 (very similar to Class 0)
-            [5.0, 5.0]  # Class 2 (well separated)
+            [5.0, 5.0]   # Class 2 (well separated)
         ], dtype=torch.float32)
 
         # Covariance matrices for each Gaussian
@@ -77,56 +78,63 @@ class SmallNet(nn.Module):
         self.ball = PoincareBall(c=self.c)
 
     def forward(self, x, return_repr=False):
-        """
-        Args:
-            x: input tensor of shape (batch_size, 2)
-            return_repr: if True, also return the learned representation.
-        Returns:
-            logits: unnormalized log-probabilities for each class.
-        """
-        hidden = self.encoder(x)  # shape: (batch, hidden_dim)
+        hidden = self.encoder(x)
         if self.hyperbolic:
             hidden = self.classifier(hidden)
-            # Map Euclidean features to the hyperbolic space.
             rep = self.ball.expmap0(hidden)
-            # Compute hyperbolic distances to prototypes.
             distances = fast_dist(rep, self.prototypes, self.c).T
-            assert not torch.isnan(distances).any()
-            # Lower distance should mean a higher logit; hence, we use negative distances.
+            # print(torch.norm(hidden, p=2, dim=1).max().item(), torch.norm(rep, p=2, dim=1).max().item())
+            if torch.isnan(distances).any():
+                print("nans")
+                print(torch.norm(hidden, p=2, dim=1).max().item(), torch.norm(rep, p=2, dim=1).max().item())
+                print(torch.isnan(rep).any())
+                print(torch.isnan(hidden).any())
+                raise ValueError("NaN in distances")
             logits = - self.tau * distances
         else:
             logits = self.classifier(hidden)
             if self.prototypes is not None:
                 logits = torch.einsum("bc,nc->bn", logits, self.prototypes)
             rep = hidden
+
         if return_repr:
             return logits, rep
         return logits
 
 
+def hinge_norm_penalty(h, threshold=0.5):
+    sqnorm = h.pow(2).sum(dim=1)
+    over = F.relu(sqnorm - threshold)
+    return (over**2).mean()
+
 def train_model(model, dataloader, num_epochs=50, lr=1e-3, device="cpu"):
     model = model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
-    epoch_acc = 0.0
     losses_per_epoch = []
     new_losses_per_epoch = []
+
     for epoch in range(num_epochs):
         model.train()
         running_loss = 0.0
         new_running_loss = 0.0
         correct = 0
         total = 0
+
         for inputs, labels in dataloader:
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
-            logits = model(inputs)
+
+            logits, rep = model(inputs, return_repr=True)
             loss = criterion(logits, labels)
             if model.prototypes is not None:
                 loss_fct = PrototypeRatioLoss(weight=1.0)
                 new_loss = loss_fct(logits, labels)
                 new_running_loss += new_loss.item() * inputs.size(0)
                 loss = loss + new_loss
+                norm_penalty = hinge_norm_penalty(rep)
+                loss = loss + norm_penalty
+
             loss.backward()
             optimizer.step()
 
@@ -134,34 +142,42 @@ def train_model(model, dataloader, num_epochs=50, lr=1e-3, device="cpu"):
             preds = torch.argmax(logits, dim=1)
             correct += (preds == labels).sum().item()
             total += inputs.size(0)
-        epoch_loss = running_loss / total
-        epoch_acc = correct / total
-        losses_per_epoch.append(epoch_loss)
+
+        losses_per_epoch.append(running_loss / total)
         new_losses_per_epoch.append(new_running_loss / total)
-        # print(f"Epoch {epoch + 1}/{num_epochs}: Loss={epoch_loss:.4f}, Accuracy={epoch_acc:.4f}")
-    return epoch_acc, losses_per_epoch, new_losses_per_epoch
+
+    print("Training complete.")
+    accuracy = correct / total
+    return accuracy, losses_per_epoch, new_losses_per_epoch
+
 
 def make_prototypes(close_prototypes):
     if close_prototypes:
-        # A and B are close, C is far away.
         angles = [0, np.pi / 20, np.pi]
     else:
-        # Equally spaced prototypes in the Poincaré ball.
         angles = [0, 2 * np.pi / 3, 4 * np.pi / 3]
 
     prototypes = torch.tensor([
         [np.cos(angle), np.sin(angle)] for angle in angles
-    ], dtype=torch.float32)  # Shape: (num_classes, out_dim)
+    ], dtype=torch.float32)
     return prototypes
 
+
 def evaluate_configuration(hyperbolic, use_prototypes, close_prototypes=True):
-    dataset = Synthetic2DClassificationDataset(n_samples_per_class=1000)
-    dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
+    # create full dataset, then split 80% train / 20% test
+    full_ds = Synthetic2DClassificationDataset(n_samples_per_class=1000)
+    n_total = len(full_ds)
+    n_train = int(0.8 * n_total)
+    n_test = n_total - n_train
+    train_ds, test_ds = random_split(full_ds, [n_train, n_test])
+    train_loader = DataLoader(train_ds, batch_size=64, shuffle=True)
+    test_loader  = DataLoader(test_ds,  batch_size=64, shuffle=False)
+
     prototypes = make_prototypes(close_prototypes)
     losses1, losses2 = [], []
+    train_accs, test_accs = [], []
 
-    accs = []
-    for i in range(NUM_RUNS):
+    for _ in range(NUM_RUNS):
         model = SmallNet(
             hyperbolic=hyperbolic,
             c=1.0,
@@ -169,173 +185,92 @@ def evaluate_configuration(hyperbolic, use_prototypes, close_prototypes=True):
             prototypes=prototypes if use_prototypes else None,
         )
 
-        accuracy, losses_per_epoch, new_losses_per_epoch = train_model(model, dataloader)
-        accs.append(accuracy)
+        # Train
+        tr_acc, losses_per_epoch, new_losses_per_epoch = train_model(model, train_loader)
+        train_accs.append(tr_acc)
         losses1.append(losses_per_epoch)
         losses2.append(new_losses_per_epoch)
+
+        # Test
+        model.eval()
+        correct, total = 0, 0
+        with torch.no_grad():
+            for x_t, y_t in test_loader:
+                logits = model(x_t)
+                preds = torch.argmax(logits, dim=1)
+                correct += (preds == y_t).sum().item()
+                total += y_t.size(0)
+        test_accs.append(correct / total)
 
     plt.figure(figsize=(8, 6), dpi=200)
     plt.plot(np.array(losses1).mean(0), label="Cross-Entropy Loss")
     plt.plot(np.array(losses2).mean(0), label="Ratio Loss")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.title(f"Losses per Epoch. {hyperbolic=}, {use_prototypes=}, {close_prototypes=}")
+    plt.title(f"Losses per Epoch. hyperbolic={hyperbolic}, use_prototypes={use_prototypes}, close_prototypes={close_prototypes}")
     plt.legend()
     plt.savefig(f"plots/losses_{hyperbolic}_{use_prototypes}_{close_prototypes}.png")
-    prefix = f"Hyperbolic" if hyperbolic else "Euclidean"
-    prefix += f" Prototypical (A and B are {'close' if close_prototypes else 'far'})" if use_prototypes else ""
-    title = f"{prefix}. Acc = {np.mean(accs):.3f}+-{np.std(accs, ddof=1):.4f}"
+
+    prefix = f"{'Hyperbolic' if hyperbolic else 'Euclidean'}"
+    if use_prototypes:
+        prefix += f" Prototypical (A and B are {'close' if close_prototypes else 'far'})"
+
+    tr_mean, tr_std = np.mean(train_accs), np.std(train_accs, ddof=1)
+    te_mean, te_std = np.mean(test_accs),  np.std(test_accs,  ddof=1)
+    title = (f"{prefix}. "
+             f"Train Acc = {tr_mean:.3f}±{tr_std:.4f}, "
+             f"Test Acc = {te_mean:.3f}±{te_std:.4f}")
     print(title)
-    return np.mean(accs), np.std(accs, ddof=1)
 
-def plot_decision_boundary(model, dataset, hyperbolic, accuracy, close_prototypes, device="cpu"):
-    model.eval()
-    # Create a grid of points covering the data domain.
-    x_min, x_max = dataset.data[:, 0].min() - 1, dataset.data[:, 0].max() + 1
-    y_min, y_max = dataset.data[:, 1].min() - 1, dataset.data[:, 1].max() + 1
-    xx, yy = np.meshgrid(np.linspace(x_min, x_max, 200),
-                         np.linspace(y_min, y_max, 200))
-    grid = torch.tensor(np.c_[xx.ravel(), yy.ravel()]).float().to(device)
-    with torch.no_grad():
-        logits = model(grid)
-        preds = torch.argmax(logits, dim=1).reshape(xx.shape)
-    plt.figure(figsize=(8, 8), dpi=100)
-    plt.contourf(xx, yy, preds.cpu().numpy(), alpha=0.3, cmap="coolwarm")
-    plt.scatter(dataset.data[:, 0], dataset.data[:, 1], c=dataset.labels, edgecolors="k", cmap="coolwarm")
-
-    plt.xlabel("x1")
-    plt.ylabel("x2")
-    plt.show()
-
-
-def plot_dataset_with_prototype_versions(dataset, device="cpu"):
-    sns.set(style="whitegrid")
-
-    # Generate prototypes for both cases using the provided function.
-    prototypes_close = make_prototypes(close_prototypes=True)
-    prototypes_far = make_prototypes(close_prototypes=False)
-
-    # Convert dataset tensors to NumPy arrays.
-    data = dataset.data.cpu().detach().numpy()
-    labels = dataset.labels.cpu().detach().numpy()
-
-    # Prepare a figure with 1 row and 3 columns.
-    fig, axs = plt.subplots(1, 3, figsize=(18, 6), dpi=200)
-
-    num_classes = int(np.max(labels)) + 1
-    cmap = cm.get_cmap("Accent", num_classes)
-    colors = [cmap(i) for i in range(num_classes)]
-
-    # Subplot 1: Plot the dataset.
-    scatter = axs[0].scatter(data[:, 0], data[:, 1], c=labels, cmap="Accent", edgecolors="k", alpha=0.6)
-    axs[0].set_title("Dataset")
-    axs[0].set_xlabel("x1")
-    axs[0].set_ylabel("x2")
-
-    # Function to draw a disk (unit circle) and the prototypes as vectors from the origin,
-    # colored according to class.
-    def plot_prototypes(ax, prototypes, title):
-        # Draw a circle representing the unit disk (Poincaré ball).
-        theta = np.linspace(0, 2 * np.pi, 400)
-        circle_x = np.cos(theta)
-        circle_y = np.sin(theta)
-        ax.plot(circle_x, circle_y, color="gray", linestyle="--")
-        if prototypes.dim() == 3:
-            prototypes_mod = prototypes.squeeze(1)
-        else:
-            prototypes_mod = prototypes
-        prototypes_np = prototypes_mod.cpu().detach().numpy()
-        # Draw arrows using annotate with increased line width for brightness.
-        for idx, proto in enumerate(prototypes_np):
-            ax.annotate(
-                '',
-                xy=(proto[0], proto[1]),
-                xytext=(0, 0),
-                arrowprops=dict(
-                    arrowstyle='->',
-                    color=colors[idx],
-                    lw=3
-                )
-            )
-        ax.set_xlim(-1.1, 1.1)
-        ax.set_ylim(-1.1, 1.1)
-        ax.set_aspect('equal', 'box')
-        ax.set_title(title)
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-
-    # Subplot 2: Plot the 'Close Prototypes' on a disk.
-    plot_prototypes(axs[1], prototypes_close, "Close Prototypes")
-
-    # Subplot 3: Plot the 'Far Prototypes' on a disk.
-    plot_prototypes(axs[2], prototypes_far, "Far Prototypes")
-
-    plt.tight_layout()
-    plt.savefig("synthetic_dataset_with_prototypes.png")
+    return tr_mean, tr_std, te_mean, te_std
 
 
 if __name__ == "__main__":
     NUM_RUNS = 10
     seed_everything(42)
 
-    dataset = Synthetic2DClassificationDataset(n_samples_per_class=1000)
-    # plot_dataset_with_prototype_versions(dataset)
-
     results = []
 
-    mean, std = evaluate_configuration(hyperbolic=True, use_prototypes=True, close_prototypes=True)
-    results.append({
-        "Method": "Hyp, CLOSE",
-        "Mean": mean,
-        "Std": std
-    })
+    for hyp, use_proto, close in [
+        (True,  True,  True),
+        (True,  True,  False),
+        (False, True,  True),
+        (False, True,  False),
+        (False, False, False),
+    ]:
+        tr_mean, tr_std, te_mean, te_std = evaluate_configuration(
+            hyperbolic=hyp,
+            use_prototypes=use_proto,
+            close_prototypes=close
+        )
+        method = (
+            f"{'Hyp' if hyp else 'Euc'}, "
+            f"{'CLOSE' if close else 'FAR' if use_proto else 'BASELINE'}"
+        )
+        results.append({
+            "Method":     method,
+            "Train Mean": tr_mean,
+            "Train Std":  tr_std,
+            "Test Mean":  te_mean,
+            "Test Std":   te_std,
+        })
 
-    mean, std = evaluate_configuration(hyperbolic=True, use_prototypes=True, close_prototypes=False)
-    results.append({
-        "Method": "Hyp, FAR",
-        "Mean": mean,
-        "Std": std
-    })
-
-    mean, std = evaluate_configuration(hyperbolic=False, use_prototypes=True, close_prototypes=True)
-    results.append({
-        "Method": "Euc, CLOSE",
-        "Mean": mean,
-        "Std": std
-    })
-
-    mean, std = evaluate_configuration(hyperbolic=False, use_prototypes=True, close_prototypes=False)
-    results.append({
-        "Method": "Euc, FAR",
-        "Mean": mean,
-        "Std": std
-    })
-
-    mean, std = evaluate_configuration(hyperbolic=False, use_prototypes=False)
-    results.append({
-        "Method": "Euc, BASELINE",
-        "Mean": mean,
-        "Std": std
-    })
-
-    # Create a DataFrame with the results.
     df = pd.DataFrame(results)
 
-    # Create the bar plot.
     plt.figure(figsize=(10, 6), dpi=200)
-    ax = sns.barplot(x="Method", y="Mean", data=df)
+    df_melt = df.melt(id_vars="Method", value_vars=["Train Mean","Test Mean"],
+                      var_name="Split", value_name="Accuracy")
+    ax = sns.barplot(x="Method", y="Accuracy", hue="Split", data=df_melt)
 
-    # Add error bars using matplotlib.
     for idx, row in df.iterrows():
-        ax.errorbar(idx, row["Mean"], yerr=row["Std"], fmt='none', c='black', capsize=5)
+        ax.errorbar(idx - 0.2, row["Train Mean"], yerr=row["Train Std"],
+                    fmt='none', c='black', capsize=5)
+        ax.errorbar(idx + 0.2, row["Test Mean"],  yerr=row["Test Std"],
+                    fmt='none', c='black', capsize=5)
 
-    # Customize labels and rotation for clarity.
-    plt.title("Evaluation of Configurations")
+    plt.title("Evaluation of Configurations (Train vs Test)")
     plt.ylabel("Accuracy")
     plt.xlabel("Method")
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
     plt.savefig("synthetic_results_bar_chart.png")
-
-    # Visualize the decision boundaries.
-    # plot_decision_boundary(model, dataset, hyperbolic=True, accuracy=accuracy, close_prototypes=close_prototypes)

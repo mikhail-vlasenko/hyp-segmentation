@@ -7,12 +7,13 @@ from prototypes import create_prototypes
 
 # root_dir = "../h_embeds/"
 root_dir = "/home/misha/projects/hyp-segmentation/hierarchy_embeddings/hierarchies/hierarchy_embeddings/experiments/spin_dataset/spin_hierarchy/"
-embed_dir = root_dir + "2025-04-19_104022/"
+embed_dir = root_dir + "2025-04-28_232541/"
 level = 3
 renormalize = False
+dim = 2
 
-file_path = embed_dir + "HierarchyEmbedding_weights_64.pth"
-save_path = embed_dir + (f"HierarchyEmbedding_weights_64_only_level_"
+file_path = embed_dir + f"HierarchyEmbedding_weights_{dim}.pth"
+save_path = embed_dir + (f"HierarchyEmbedding_weights_{dim}_only_level_"
                          f"{level}{'_renormalized' if renormalize else ''}.pth")
 
 embeddings = torch.load(file_path)
