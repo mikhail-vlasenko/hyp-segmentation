@@ -1,3 +1,5 @@
+from typing import Union, Tuple
+
 import torch
 from torch import nn
 import math
@@ -15,7 +17,9 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
     def __init__(self):
         raise NotImplementedError
 
-    def forward(self, encoder_hidden_states: torch.FloatTensor, return_repr: bool = False) -> torch.Tensor:
+    def forward(
+            self, encoder_hidden_states: torch.FloatTensor, return_repr: bool = False
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         batch_size = encoder_hidden_states[-1].shape[0]
 
         all_hidden_states = ()
@@ -80,7 +84,7 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
             self.dim = self.config.decoder_hidden_size
         else:
             self.dim = dim
-        
+
         self.max_class_sep = max_class_sep
         self.tau = tau
         if self.max_class_sep:

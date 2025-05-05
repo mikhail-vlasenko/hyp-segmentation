@@ -29,6 +29,7 @@ def parse_args():
     parser.add_argument("--focal_loss_gamma", type=float, default=0.7, help="Gamma parameter for focal loss")
     parser.add_argument("--ratio_loss_weight", type=float, default=1., help="Weight for the ratio loss. Set to 0 to disable")
     parser.add_argument("--clamp_to", type=float, default=2., help="Clamp the ratio loss to this value on the high side")
+    parser.add_argument("--norm_penalty_weight", type=float, default=0., help="Weight of the hinge norm penalty for hyperbolic representations")
     parser.add_argument("--head_dim", type=int, default=None, help="Dimension reduction in the decode head")
     parser.add_argument("--crop_size", type=float, nargs=2, default=(0.8, 0.8), help="Crop size as a fraction of image dimensions")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -84,6 +85,7 @@ def main():
             embeddings_path=args.embeddings_path,
             ratio_loss_weight=args.ratio_loss_weight,
             clamp_to=args.clamp_to,
+            norm_penalty_weight=args.norm_penalty_weight,
         )
 
     if not args.model_file:

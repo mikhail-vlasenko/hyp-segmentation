@@ -9,6 +9,7 @@ import lightning as L
 from torch import nn
 from torch.autograd import Function
 from torch.nn import CrossEntropyLoss
+import torch.nn.functional as F
 
 from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
 from focal_loss.focal_loss import FocalLoss
@@ -39,6 +40,7 @@ class SegformerLightningModule(L.LightningModule):
         embeddings_path: str = None,
         ratio_loss_weight: float = 0.0,
         clamp_to: float = 2.0,
+        norm_penalty_weight: float = 0.0,
     ):
         super().__init__()
         # Save all hyperparameters so they can be later accessed via self.hparams
@@ -91,8 +93,9 @@ class SegformerLightningModule(L.LightningModule):
 
         self.ratio_loss_weight = ratio_loss_weight
         self.clamp_to = clamp_to
+        self.norm_penalty_weight = norm_penalty_weight
 
-    def logits_to_loss(self, logits, labels, num_classes, background_index, return_preds=False):
+    def logits_to_loss(self, logits, labels, reprs, num_classes, background_index, return_preds=False):
         # upsample logits to the images' original size
         upsampled_logits = nn.functional.interpolate(
             logits, size=labels.shape[-2:], mode="bilinear", align_corners=False
@@ -110,6 +113,10 @@ class SegformerLightningModule(L.LightningModule):
         if self.ratio_loss_weight > 0 and self.decode_heads[self.granularities[0]].max_class_sep:
             loss_fct2 = PrototypeRatioLoss(weight=self.ratio_loss_weight, clamp_to=self.clamp_to)
             loss += loss_fct2(upsampled_logits, labels)
+
+        if self.norm_penalty_weight > 0 and self.decode_heads[self.granularities[0]].hyperbolic:
+            norm_penalty = hinge_norm_penalty(reprs)
+            loss += self.norm_penalty_weight * norm_penalty
 
         if return_preds:
             preds = torch.argmax(upsampled_logits, dim=-1 if self.focal_loss else 1)
@@ -130,8 +137,9 @@ class SegformerLightningModule(L.LightningModule):
         result = {}
         # Compute logits for each granularity using the same backbone features
         for granularity in self.granularities:
-            logits = self.decode_heads[granularity](encoder_hidden_states)
+            logits, reprs = self.decode_heads[granularity](encoder_hidden_states, return_repr=True)
             result[f"logits_{granularity}"] = logits
+            result[f"reprs_{granularity}"] = reprs
         return result
 
     def training_step(self, batch, batch_idx):
@@ -141,10 +149,11 @@ class SegformerLightningModule(L.LightningModule):
         for granularity in self.granularities:
             logits = outputs[f"logits_{granularity}"]
             labels = batch[f"labels_{granularity}"]
+            reprs = outputs[f"reprs_{granularity}"]
             loss += self.logits_to_loss(
-                logits, labels,
+                logits, labels, reprs,
                 num_labels_for_granularity(granularity),
-                background_class_for_granularity(granularity)
+                background_class_for_granularity(granularity),
             )
 
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
@@ -156,8 +165,9 @@ class SegformerLightningModule(L.LightningModule):
         for granularity in self.granularities:
             logits = outputs[f"logits_{granularity}"]
             labels = batch[f"labels_{granularity}"]
+            reprs = outputs[f"reprs_{granularity}"]
             result = self.logits_to_loss(
-                logits, labels,
+                logits, labels, reprs,
                 num_labels_for_granularity(granularity),
                 background_class_for_granularity(granularity),
                 return_preds=True
@@ -354,3 +364,9 @@ class ClampMaxGrad(Function):
                              torch.ones_like(input))
         # scale the incoming gradient
         return grad_output * factor, None
+
+
+def hinge_norm_penalty(h, threshold=0.5):
+    sqnorm = h.pow(2).sum(dim=1)
+    over = F.relu(sqnorm - threshold)
+    return (over**2).mean()

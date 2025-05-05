@@ -7,13 +7,12 @@ import matplotlib.pyplot as plt
 from geoopt import PoincareBall
 from lightning import seed_everything
 from torch.utils.data import Dataset, DataLoader, random_split
-import torch.nn.functional as F
 import seaborn as sns
 import matplotlib.cm as cm
 import pandas as pd
 
 from hyperbolic_layers import fast_dist
-from model import PrototypeRatioLoss
+from model import PrototypeRatioLoss, hinge_norm_penalty
 
 
 class Synthetic2DClassificationDataset(Dataset):
@@ -101,11 +100,6 @@ class SmallNet(nn.Module):
             return logits, rep
         return logits
 
-
-def hinge_norm_penalty(h, threshold=0.5):
-    sqnorm = h.pow(2).sum(dim=1)
-    over = F.relu(sqnorm - threshold)
-    return (over**2).mean()
 
 def train_model(model, dataloader, num_epochs=50, lr=1e-3, device="cpu"):
     model = model.to(device)
