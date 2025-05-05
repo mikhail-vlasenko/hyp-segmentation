@@ -38,6 +38,7 @@ class SegformerLightningModule(L.LightningModule):
         focal_loss_gamma: float = 0.7,
         embeddings_path: str = None,
         ratio_loss_weight: float = 0.0,
+        clamp_to: float = 2.0,
     ):
         super().__init__()
         # Save all hyperparameters so they can be later accessed via self.hparams
@@ -89,6 +90,7 @@ class SegformerLightningModule(L.LightningModule):
         self.test_targets = {g: [] for g in self.granularities}
 
         self.ratio_loss_weight = ratio_loss_weight
+        self.clamp_to = clamp_to
 
     def logits_to_loss(self, logits, labels, num_classes, background_index, return_preds=False):
         # upsample logits to the images' original size
@@ -106,7 +108,7 @@ class SegformerLightningModule(L.LightningModule):
 
         loss = loss_fct(upsampled_logits, labels)
         if self.ratio_loss_weight > 0 and self.decode_heads[self.granularities[0]].max_class_sep:
-            loss_fct2 = PrototypeRatioLoss(weight=self.ratio_loss_weight)
+            loss_fct2 = PrototypeRatioLoss(weight=self.ratio_loss_weight, clamp_to=self.clamp_to)
             loss += loss_fct2(upsampled_logits, labels)
 
         if return_preds:
@@ -265,7 +267,7 @@ class SegformerLightningModule(L.LightningModule):
 
 
 class PrototypeRatioLoss(nn.Module):
-    def __init__(self, weight=1.0, eps=1e-4):
+    def __init__(self, weight=1.0, eps=1e-4, clamp_to=2.0):
         """
         Args:
             weight (float): Weight for the ratio loss component.
@@ -274,6 +276,7 @@ class PrototypeRatioLoss(nn.Module):
         super().__init__()
         self.weight = weight
         self.eps = eps
+        self.clamp_to = clamp_to
 
     def forward(self, logits: torch.Tensor, labels: torch.LongTensor) -> torch.Tensor:
         """
@@ -319,7 +322,7 @@ class PrototypeRatioLoss(nn.Module):
         ratio_loss = margin / min_incorrect
 
         # clamp each element to max=1 with proportional gradient scaling
-        ratio_loss = ClampMaxGrad.apply(ratio_loss, 2.0)
+        ratio_loss = ClampMaxGrad.apply(ratio_loss, self.clamp_to)
 
         # mean over positions
         ratio_loss = ratio_loss.mean()
