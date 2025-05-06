@@ -126,8 +126,8 @@ def train_model(model, dataloader, num_epochs=50, lr=1e-3, device="cpu"):
                 new_loss = loss_fct(logits, labels)
                 new_running_loss += new_loss.item() * inputs.size(0)
                 loss = loss + new_loss
-                norm_penalty = hinge_norm_penalty(rep)
-                loss = loss + norm_penalty
+                # norm_penalty = hinge_norm_penalty(rep)
+                # loss = loss + norm_penalty
 
             loss.backward()
             optimizer.step()
@@ -252,6 +252,8 @@ if __name__ == "__main__":
     df = pd.DataFrame(results)
 
     plt.figure(figsize=(10, 6), dpi=200)
+    sns.set(style="whitegrid")      # clean background
+    sns.set_palette("Accent")       # requested palette
     df_melt = df.melt(id_vars="Method", value_vars=["Train Mean","Test Mean"],
                       var_name="Split", value_name="Accuracy")
     ax = sns.barplot(x="Method", y="Accuracy", hue="Split", data=df_melt)

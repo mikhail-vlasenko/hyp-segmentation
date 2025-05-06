@@ -8,6 +8,7 @@ from transformers import SegformerImageProcessor, SegformerForSemanticSegmentati
 
 from dataset import SPINDataModule
 from model import SegformerLightningModule
+from utils import DoRemapObjects
 
 
 def parse_args():
@@ -31,6 +32,7 @@ def parse_args():
     parser.add_argument("--clamp_to", type=float, default=2., help="Clamp the ratio loss to this value on the high side")
     parser.add_argument("--norm_penalty_weight", type=float, default=0., help="Weight of the hinge norm penalty for hyperbolic representations")
     parser.add_argument("--head_dim", type=int, default=None, help="Dimension reduction in the decode head")
+    parser.add_argument("--remap_objects", action="store_false", help="Remap object classes to coarse classes")
     parser.add_argument("--crop_size", type=float, nargs=2, default=(0.8, 0.8), help="Crop size as a fraction of image dimensions")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--num_workers", type=int, default=4, help="Number of workers for data loading")
@@ -43,6 +45,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    DoRemapObjects.value = args.remap_objects
     dataset_annotation_dir = os.path.join(args.dataset_dir, "annotations")
     dataset_image_dir = os.path.join(args.dataset_dir, "images")
 
@@ -64,6 +67,7 @@ def main():
         batch_size=args.batch_size,
         crop_size=args.crop_size,
         num_workers=args.num_workers,
+        remap_objects=args.remap_objects,
     )
 
     if args.model_file:

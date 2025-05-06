@@ -1,4 +1,7 @@
+import json
+from pathlib import Path
 from pprint import pprint
+from typing import List, Optional
 
 import numpy as np
 from spin import SPIN, file_to_object_mapping
@@ -10,6 +13,7 @@ from torchvision.transforms import v2 as transforms
 import torchvision.transforms.functional as TF
 from transformers import SegformerImageProcessor
 
+from hierarchy_embeddings.object_supercategory_mapping import OBJECT_SUPERCATEGORY_MAPPING
 from utils import background_class_for_granularity
 
 
@@ -44,7 +48,16 @@ class RandomCropAndFlip:
 
 
 class SPINSegmentationDataset(Dataset):
-    def __init__(self, annotation_dir, image_dir, split, granularities, processor, crop_size=None):
+    def __init__(
+            self,
+            annotation_dir: str | Path,
+            image_dir: str | Path,
+            split: str,
+            granularities: List[str],
+            processor,
+            crop_size: Optional[int] = None,
+            remap_objects: bool = False,
+    ):
         self.spin_api = SPIN(
             annotation_dir=annotation_dir,
             image_dir=image_dir,
@@ -61,6 +74,16 @@ class SPINSegmentationDataset(Dataset):
         else:
             self.transform = None
 
+        # Optional coarse mapping for whole‑object masks
+        self._whole_lut = None
+        if remap_objects:
+            assert len(OBJECT_SUPERCATEGORY_MAPPING) == 158
+            assert max(OBJECT_SUPERCATEGORY_MAPPING) == 10
+
+            # background is last in whole, there are 11 supercategories
+            # Build a NumPy LUT of length 159: 0‑157 from JSON, 158 → background
+            self._whole_lut = np.asarray(OBJECT_SUPERCATEGORY_MAPPING + [11], dtype=np.int16)
+
     def __len__(self):
         return len(self.image_ids)
 
@@ -70,17 +93,20 @@ class SPINSegmentationDataset(Dataset):
             image_id,
             background_class=background_class_for_granularity(granularity),
         )
-        segmentation_map = Image.fromarray(segmentation_map.astype("uint8"))
-        return segmentation_map
+
+        # Optional remap for whole granularity --------------------------------
+        if granularity == "whole" and self._whole_lut is not None:
+            segmentation_map = self._whole_lut[segmentation_map]
+
+        return Image.fromarray(segmentation_map.astype("uint8"))
 
     def __getitem__(self, idx):
-        # todo: infer the train signal from one segmentation map rather than constructing 3 of them
-        #   requires the object class to be general (quadruped instead of dog)
         image_id = self.image_ids[idx]
         image = self.spin_api.get_image(image_id)
 
         segmentation_maps = [
-            self.get_segmentation_map(image_id, granularity) for granularity in self.granularities
+            self.get_segmentation_map(image_id, granularity)
+            for granularity in self.granularities
         ]
 
         if self.transform:
@@ -90,8 +116,8 @@ class SPINSegmentationDataset(Dataset):
         for granularity, segmentation_map in zip(self.granularities, segmentation_maps):
             res = self.processor(
                 images=image, segmentation_maps=segmentation_map, return_tensors="pt"
-            )  # some computational overhead here for 2+ granularities
-            inputs[f"pixel_values"] = res["pixel_values"]
+            )
+            inputs["pixel_values"] = res["pixel_values"]
             inputs[f"labels_{granularity}"] = res["labels"]
 
         # Remove batch dimension (since processor adds it)
@@ -115,6 +141,7 @@ class SPINDataModule(L.LightningDataModule):
         batch_size: int = 8,
         crop_size=(0.8, 0.8),
         num_workers=4,
+        remap_objects: bool = False,
     ):
         super().__init__()
         self.annotation_dir = annotation_dir
@@ -124,6 +151,7 @@ class SPINDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.crop_size = crop_size
         self.num_workers = num_workers
+        self.remap_objects = remap_objects
 
     def setup(self, stage=None):
         # Create train/val datasets
@@ -135,6 +163,7 @@ class SPINDataModule(L.LightningDataModule):
                 processor=self.processor,
                 granularities=self.granularities,
                 crop_size=self.crop_size,
+                remap_objects=self.remap_objects,
             )
         self.val_dataset = SPINSegmentationDataset(
             self.annotation_dir,
@@ -142,6 +171,7 @@ class SPINDataModule(L.LightningDataModule):
             split="val",
             granularities=self.granularities,
             processor=self.processor,
+            remap_objects=self.remap_objects,
         )
         self.test_dataset = SPINSegmentationDataset(
             self.annotation_dir,
@@ -149,6 +179,7 @@ class SPINDataModule(L.LightningDataModule):
             split="test",
             granularities=self.granularities,
             processor=self.processor,
+            remap_objects=self.remap_objects,
         )
 
     def train_dataloader(self):
