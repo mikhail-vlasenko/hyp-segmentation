@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Union, Tuple
 
 import torch
@@ -11,6 +12,18 @@ from transformers import SegformerDecodeHead
 from embedding_space import EmbeddingSpace
 from hyperbolic_layers import fast_dist
 from prototypes import create_prototypes
+
+
+@dataclass
+class HeadKwargs:
+    num_classes: int = 0
+    dim: int = None
+    hyperbolic: bool = False
+    curvature: float = 0.1
+    max_class_sep: bool = False
+    tau: float = 0.1
+    embeddings_path: str = None
+    other_level_prototypes: str = None
 
 
 class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
@@ -79,43 +92,45 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
             return logits, rep
         return logits
 
-    def __post_init__(self, num_classes, dim, hyperbolic, curvature, max_class_sep, tau, embeddings_path):
-        if dim is None:
+    def __post_init__(self, args: HeadKwargs):
+        if args.dim is None:
             self.dim = self.config.decoder_hidden_size
         else:
-            self.dim = dim
+            self.dim = args.dim
 
-        self.max_class_sep = max_class_sep
-        self.tau = tau
+        self.max_class_sep = args.max_class_sep
+        self.tau = args.tau
         if self.max_class_sep:
-            if embeddings_path:
+            if args.embeddings_path:
                 # these should be already in the ball
-                prototypes = torch.load(embeddings_path).embeddings.weight.tensor
+                prototypes = torch.load(args.embeddings_path).embeddings.weight.tensor
                 norm = torch.norm(prototypes, dim=1, p=2)
                 assert norm.max() < 1.0, f"Embeddings are not in the ball, max norm is {norm.max()}"
                 num_classes = prototypes.shape[1]  # make the decoder compress to the right channel dimension
             else:
-                prototypes = create_prototypes(num_classes)
+                prototypes = create_prototypes(args.num_classes)
                 prototypes = torch.from_numpy(prototypes).float()
                 # change num_classes to num_classes - 1 as the network should now output that dimension
                 num_classes = prototypes.shape[1]
-                if hyperbolic:
+                if args.hyperbolic:
                     prototypes = prototypes * 0.95  # downscale to have prototypes in the ball, not on the boundary
-            if hyperbolic:
+            if args.hyperbolic:
                 prototypes = prototypes.unsqueeze(1)
             self.prototypes = torch.nn.Parameter(prototypes, requires_grad=False)
+            if args.other_level_prototypes:
+                pass
 
-        self.hyperbolic = hyperbolic
+        self.hyperbolic = args.hyperbolic
 
-        self.curvature = curvature
+        self.curvature = args.curvature
         self.ball = gt.PoincareBall(c=self.curvature)
 
         if self.hyperbolic and not self.max_class_sep:
-            normals_ = torch.randn(num_classes, self.dim) * 1e-5
+            normals_ = torch.randn(args.num_classes, self.dim) * 1e-5
             normals_ = pmath.expmap0(normals_, k=self.ball.k)
             self.normals = gt.ManifoldParameter(normals_, manifold=self.ball, requires_grad=True)
 
-            offsets_ = torch.zeros(num_classes, self.dim)
+            offsets_ = torch.zeros(args.num_classes, self.dim)
             offsets_ = pmath.expmap0(offsets_, k=self.ball.k)
             self.offsets = gt.ManifoldParameter(offsets_, manifold=self.ball, requires_grad=True)
 
@@ -130,18 +145,16 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
                 # nn.BatchNorm2d(self.dim),
             )
 
-        self.classifier = nn.Conv2d(self.dim, num_classes, kernel_size=1)
-        self.num_classes = num_classes
+        self.classifier = nn.Conv2d(self.dim, args.num_classes, kernel_size=1)
+        self.num_classes = args.num_classes
 
 
     @classmethod
     def from_segformer_decode_head(
-            cls, segformer_decode_head: SegformerDecodeHead,
-            num_classes, dim, hyperbolic, curvature, max_class_sep, tau, embeddings_path
+            cls, segformer_decode_head: SegformerDecodeHead, args: HeadKwargs
     ) -> "HyperbolicSegformerDecodeHead":
         segformer_decode_head.__class__ = cls
 
-        segformer_decode_head.__post_init__(
-            num_classes, dim, hyperbolic, curvature, max_class_sep, tau, embeddings_path)
+        segformer_decode_head.__post_init__(args)
 
         return segformer_decode_head

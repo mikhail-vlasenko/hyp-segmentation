@@ -7,7 +7,9 @@ from lightning.pytorch.loggers import WandbLogger
 from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
 
 from dataset import SPINDataModule
+from losses import LossParams
 from model import SegformerLightningModule
+from segformer_head import HeadKwargs
 from utils import DoRemapObjects
 
 
@@ -74,22 +76,28 @@ def main():
         segformer_module = SegformerLightningModule.load_from_checkpoint(args.model_file)
         print(f"Loaded model from {args.model_file}")
     else:
-        segformer_module = SegformerLightningModule(
-            model_name=args.model_name,
-            lr=args.learning_rate,
-            granularities=granularities,
-            head_dim=args.head_dim,
+        head_kwargs = HeadKwargs(
+            dim=args.head_dim,
             hyperbolic=args.hyperbolic,
             curvature=args.curvature,
             max_class_sep=args.max_class_sep,
             tau=args.tau,
+            embeddings_path=args.embeddings_path,
+        )
+        loss_params = LossParams(
             background_loss_weight=args.background_loss_weight,
             focal_loss=args.focal_loss,
             focal_loss_gamma=args.focal_loss_gamma,
-            embeddings_path=args.embeddings_path,
             ratio_loss_weight=args.ratio_loss_weight,
             clamp_to=args.clamp_to,
             norm_penalty_weight=args.norm_penalty_weight,
+        )
+        segformer_module = SegformerLightningModule(
+            model_name=args.model_name,
+            lr=args.learning_rate,
+            granularities=granularities,
+            head_kwargs=head_kwargs,
+            loss_params=loss_params,
         )
 
     if not args.model_file:
