@@ -84,19 +84,20 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
                     result.logits[key] = self.prototypes_logits(rep, rep_shape, value)
             else:
                 embedding_space = EmbeddingSpace(self.offsets, self.normals, self.curvature)
-                result.logits = embedding_space.run_log_torch(rep, self.offsets, self.normals, self.curvature)
-            result.logits = result.logits.permute(0, 3, 1, 2)
+                result.logits[self.primary_granularity] = embedding_space.run_log_torch(rep, self.offsets, self.normals, self.curvature)
+            for key in result.logits:
+                result.logits[key] = result.logits[key].permute(0, 3, 1, 2)
         else:
-            result.logits = self.classifier(hidden_states)
+            result.logits[self.primary_granularity] = self.classifier(hidden_states)
             if self.max_class_sep:
                 # logits are of shape (batch, num_classes - 1, h, w)
                 # prototypes are of shape (num_classes, num_classes - 1)
                 # we want (batch, num_classes, h, w) on output
                 for key, value in self.prototypes.items():
-                    result.logits[key] = torch.einsum("bchw,nc->bnhw", result.logits, value)
+                    result.logits[key] = torch.einsum("bchw,nc->bnhw", result.logits[self.primary_granularity], value)
             rep = hidden_states
         result.repr = rep
-        return rep
+        return result
 
     def __post_init__(self, args: HeadKwargs):
         if args.dim is None:
