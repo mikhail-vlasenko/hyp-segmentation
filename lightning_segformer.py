@@ -83,17 +83,20 @@ def main():
         segformer_module = SegformerLightningModule.load_from_checkpoint(args.model_file)
         print(f"Loaded model from {args.model_file}")
     else:
+        paths_dict = {}
+        if args.whole_embeddings_path:
+            paths_dict["whole"] = args.whole_embeddings_path
+        if args.part_embeddings_path:
+            paths_dict["part"] = args.part_embeddings_path
+        if args.subpart_embeddings_path:
+            paths_dict["subpart"] = args.subpart_embeddings_path
         head_kwargs = HeadKwargs(
             dim=args.head_dim,
             hyperbolic=args.hyperbolic,
             curvature=args.curvature,
             max_class_sep=args.max_class_sep,
             tau=args.tau,
-            embeddings_paths={
-                "whole": args.whole_embeddings_path,
-                "part": args.part_embeddings_path,
-                "subpart": args.subpart_embeddings_path,
-            }
+            embeddings_paths=paths_dict
         )
         loss_params = LossParams(
             background_loss_weight=args.background_loss_weight,
