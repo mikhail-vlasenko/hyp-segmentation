@@ -190,7 +190,7 @@ class SegformerLightningModule(L.LightningModule):
         self.test_targets = {g: [] for g in self.granularities}
 
     def on_eval_epoch_end(self, prefix="val"):
-        for granularity in self.granularities:
+        for granularity in self.prediction_granularities:
             metric = self.jaccards[granularity]
             hierarchical_metric = self.hierarchical_metrics[granularity]
             self.log(f"{prefix}_mIoU_{granularity}", metric.compute(), prog_bar=True)

@@ -28,10 +28,10 @@ def parse_args():
     parser.add_argument("--head_dim", type=int, default=None, help="Dimension reduction in the decode head")
     parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate")
     # losses configuration
-    parser.add_argument("--background_loss_weight", type=float, default=0.01, help="Weight for the background class in the cross-entropy loss")
+    parser.add_argument("--background_loss_weight", type=float, default=1.0, help="Weight for the background class in the cross-entropy loss")
     parser.add_argument("--focal_loss", action="store_true", help="Use focal loss for training instead of cross-entropy")
     parser.add_argument("--focal_loss_gamma", type=float, default=0.7, help="Gamma parameter for focal loss")
-    parser.add_argument("--ratio_loss_weight", type=float, default=1., help="Weight for the ratio loss. Set to 0 to disable")
+    parser.add_argument("--ratio_loss_weight", type=float, default=0., help="Weight for the ratio loss. Set to 0 to disable")
     parser.add_argument("--clamp_to", type=float, default=2., help="Clamp the ratio loss to this value on the high side")
     parser.add_argument("--norm_penalty_weight", type=float, default=0., help="Weight of the hinge norm penalty for hyperbolic representations")
     # training configuration
