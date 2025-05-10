@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import Union, Tuple
+from dataclasses import dataclass, field
+from typing import Union, Tuple, Dict
 
 import torch
 from torch import nn
@@ -12,18 +12,24 @@ from transformers import SegformerDecodeHead
 from embedding_space import EmbeddingSpace
 from hyperbolic_layers import fast_dist
 from prototypes import create_prototypes
+from utils import num_labels_for_granularity
 
 
 @dataclass
 class HeadKwargs:
-    num_classes: int = 0
+    primary_granularity: str = None
     dim: int = None
     hyperbolic: bool = False
     curvature: float = 0.1
     max_class_sep: bool = False
     tau: float = 0.1
-    embeddings_path: str = None
-    other_level_prototypes: str = None
+    embeddings_paths: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class HeadReturnType:
+    logits: Dict[str, torch.Tensor] = field(default_factory=dict)
+    repr: torch.Tensor = None
 
 
 class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
@@ -31,8 +37,8 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
         raise NotImplementedError
 
     def forward(
-            self, encoder_hidden_states: torch.FloatTensor, return_repr: bool = False
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+            self, encoder_hidden_states: torch.FloatTensor, eval_mode: bool = False
+    ) -> HeadReturnType:
         batch_size = encoder_hidden_states[-1].shape[0]
 
         all_hidden_states = ()
@@ -64,6 +70,7 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
         # print(f"{hidden_states.shape=}")  # batch_size, 256, height/4, width/4
 
         # logits are of shape (batch_size, num_labels, height/4, width/4)
+        result = HeadReturnType()
         if self.hyperbolic:
             if self.max_class_sep:
                 hidden_states = self.classifier(hidden_states)
@@ -73,24 +80,23 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
             if self.max_class_sep:
                 rep_shape = rep.shape
                 rep = rep.view(-1, rep.shape[-1])
-                distances = fast_dist(rep, self.prototypes, self.ball.k).T
-                logits = (-1 * distances * self.tau).reshape(*rep_shape[:-1], self.prototypes.shape[0])
+                for key, value in self.prototypes.items():
+                    result.logits[key] = self.prototypes_logits(rep, rep_shape, value)
             else:
-                self.embedding_space = EmbeddingSpace(self.offsets, self.normals, self.curvature)
-                logits = self.embedding_space.run_log_torch(rep, self.offsets, self.normals, self.curvature)
-            logits = logits.permute(0, 3, 1, 2)
+                embedding_space = EmbeddingSpace(self.offsets, self.normals, self.curvature)
+                result.logits = embedding_space.run_log_torch(rep, self.offsets, self.normals, self.curvature)
+            result.logits = result.logits.permute(0, 3, 1, 2)
         else:
-            logits = self.classifier(hidden_states)
+            result.logits = self.classifier(hidden_states)
             if self.max_class_sep:
                 # logits are of shape (batch, num_classes - 1, h, w)
                 # prototypes are of shape (num_classes, num_classes - 1)
                 # we want (batch, num_classes, h, w) on output
-                logits = torch.einsum("bchw,nc->bnhw", logits, self.prototypes)
+                for key, value in self.prototypes.items():
+                    result.logits[key] = torch.einsum("bchw,nc->bnhw", result.logits, value)
             rep = hidden_states
-
-        if return_repr:
-            return logits, rep
-        return logits
+        result.repr = rep
+        return rep
 
     def __post_init__(self, args: HeadKwargs):
         if args.dim is None:
@@ -100,37 +106,44 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
 
         self.max_class_sep = args.max_class_sep
         self.tau = args.tau
-        if self.max_class_sep:
-            if args.embeddings_path:
-                # these should be already in the ball
-                prototypes = torch.load(args.embeddings_path).embeddings.weight.tensor
-                norm = torch.norm(prototypes, dim=1, p=2)
-                assert norm.max() < 1.0, f"Embeddings are not in the ball, max norm is {norm.max()}"
-                num_classes = prototypes.shape[1]  # make the decoder compress to the right channel dimension
-            else:
-                prototypes = create_prototypes(args.num_classes)
-                prototypes = torch.from_numpy(prototypes).float()
-                # change num_classes to num_classes - 1 as the network should now output that dimension
-                num_classes = prototypes.shape[1]
-                if args.hyperbolic:
-                    prototypes = prototypes * 0.95  # downscale to have prototypes in the ball, not on the boundary
-            if args.hyperbolic:
-                prototypes = prototypes.unsqueeze(1)
-            self.prototypes = torch.nn.Parameter(prototypes, requires_grad=False)
-            if args.other_level_prototypes:
-                pass
-
         self.hyperbolic = args.hyperbolic
+        self.primary_granularity = args.primary_granularity
+        self.num_classes = num_labels_for_granularity(self.primary_granularity)
+
+        self.prototypes = {}
+        for key, value in args.embeddings_paths.items():
+            self.prototypes[key] = torch.load(value).embeddings.weight.tensor
+
+        if self.max_class_sep:
+            if len(self.prototypes) > 0:
+                # these should be already in the ball
+                norm = torch.norm(self.prototypes[self.primary_granularity], dim=1, p=2)
+                assert norm.max() < 1.0, f"Embeddings are not in the ball, max norm is {norm.max()}"
+            else:
+                prototypes = create_prototypes(self.num_classes)
+                prototypes = torch.from_numpy(prototypes).float()
+                if self.hyperbolic:
+                    prototypes = prototypes * 0.95  # downscale to have prototypes in the ball, not on the boundary
+                self.prototypes[self.primary_granularity] = prototypes
+
+            self.num_classes = self.prototypes[self.primary_granularity].shape[1]  # make the decoder compress to the right channel dimension
+
+            for key, value in self.prototypes.items():
+                if self.hyperbolic:
+                    value = value.unsqueeze(1)
+                self.prototypes[key] = torch.nn.Parameter(value, requires_grad=False)
+
+            self.prototypes = nn.ParameterDict(self.prototypes)
 
         self.curvature = args.curvature
         self.ball = gt.PoincareBall(c=self.curvature)
 
         if self.hyperbolic and not self.max_class_sep:
-            normals_ = torch.randn(args.num_classes, self.dim) * 1e-5
+            normals_ = torch.randn(self.num_classes, self.dim) * 1e-5
             normals_ = pmath.expmap0(normals_, k=self.ball.k)
             self.normals = gt.ManifoldParameter(normals_, manifold=self.ball, requires_grad=True)
 
-            offsets_ = torch.zeros(args.num_classes, self.dim)
+            offsets_ = torch.zeros(self.num_classes, self.dim)
             offsets_ = pmath.expmap0(offsets_, k=self.ball.k)
             self.offsets = gt.ManifoldParameter(offsets_, manifold=self.ball, requires_grad=True)
 
@@ -145,9 +158,7 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
                 # nn.BatchNorm2d(self.dim),
             )
 
-        self.classifier = nn.Conv2d(self.dim, args.num_classes, kernel_size=1)
-        self.num_classes = args.num_classes
-
+        self.classifier = nn.Conv2d(self.dim, self.num_classes, kernel_size=1)
 
     @classmethod
     def from_segformer_decode_head(
@@ -158,3 +169,7 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
         segformer_decode_head.__post_init__(args)
 
         return segformer_decode_head
+
+    def prototypes_logits(self, rep: torch.Tensor, rep_shape, prototypes) -> torch.Tensor:
+        distances = fast_dist(rep, prototypes, self.ball.k).T
+        return (-1 * distances * self.tau).reshape(*rep_shape[:-1], prototypes.shape[0])

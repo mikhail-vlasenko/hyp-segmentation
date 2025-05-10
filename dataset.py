@@ -169,7 +169,7 @@ class SPINDataModule(L.LightningDataModule):
             self.annotation_dir,
             self.image_dir,
             split="val",
-            granularities=self.granularities,
+            granularities=["whole", "part", "subpart"],  # just put all of them here, sometimes used in eval
             processor=self.processor,
             remap_objects=self.remap_objects,
         )
@@ -177,7 +177,7 @@ class SPINDataModule(L.LightningDataModule):
             self.annotation_dir,
             self.image_dir,
             split="test",
-            granularities=self.granularities,
+            granularities=["whole", "part", "subpart"],
             processor=self.processor,
             remap_objects=self.remap_objects,
         )

@@ -1,4 +1,5 @@
 import copy
+from dataclasses import replace
 
 import torch
 import numpy as np
@@ -14,7 +15,7 @@ from torchmetrics.classification import MulticlassJaccardIndex
 from hierarchy_embeddings.utils import load_hierarchy
 from losses import LossParams, PrototypeRatioLoss, hinge_norm_penalty
 from metric import GraphDistanceSoftIoU, compute_distance_matrix
-from segformer_head import HyperbolicSegformerDecodeHead, HeadKwargs
+from segformer_head import HyperbolicSegformerDecodeHead, HeadKwargs, HeadReturnType
 from utils import num_labels_for_granularity, background_class_for_granularity
 
 
@@ -39,55 +40,46 @@ class SegformerLightningModule(L.LightningModule):
         self.granularities = granularities
         self.loss_params = loss_params
 
-        self.head_args = {}
-        for g in self.granularities:
-            arg = copy.deepcopy(head_kwargs)
-            arg.num_classes = num_labels_for_granularity(g)
-            self.head_args[g] = arg
-
         self.decode_heads = nn.ModuleDict({
             g: HyperbolicSegformerDecodeHead.from_segformer_decode_head(
                 copy.deepcopy(original_decode_head),
-                self.head_args[g]
+                replace(head_kwargs, primary_granularity=g),
             )
             for g in self.granularities
         })
+        
+        if len(self.granularities) > 1 and len(head_kwargs.embeddings_paths) > 0:
+            raise ValueError("Cannot use multiple heads with embeddings paths. (yet). Forward method will overwrite.")
+        self.prediction_granularities = {
+            *head_kwargs.embeddings_paths,  # implicitly .keys()
+            *self.granularities
+        }
 
         self.jaccards = nn.ModuleDict({
             g: MulticlassJaccardIndex(
                 num_classes=num_labels_for_granularity(g),
                 ignore_index=None
             )
-            for g in self.granularities
-        })
-        self.no_bg_jaccards = nn.ModuleDict({
-            g: MulticlassJaccardIndex(
-                num_classes=num_labels_for_granularity(g),
-                ignore_index=background_class_for_granularity(g)
-            )
-            for g in self.granularities
+            for g in self.prediction_granularities
         })
         self.hierarchical_metrics = self.configure_hierarchical_metrics()
 
         # Prepare containers for test predictions and targets.
-        self.test_preds = {g: [] for g in self.granularities}
-        self.test_targets = {g: [] for g in self.granularities}
+        self.test_preds = {g: [] for g in self.prediction_granularities}
+        self.test_targets = {g: [] for g in self.prediction_granularities}
 
-    def logits_to_loss(self, logits, labels, reprs, num_classes, background_index, return_preds=False):
-        # upsample logits to the images' original size
-        upsampled_logits = nn.functional.interpolate(
-            logits, size=labels.shape[-2:], mode="bilinear", align_corners=False
-        )
+    def logits_to_loss(self, upsampled_logits, labels, reprs, num_classes, background_index):
         if self.loss_params.focal_loss:
             loss_fct = FocalLoss(gamma=self.loss_params.focal_loss_gamma)
-            upsampled_logits = upsampled_logits.permute(0, 2, 3, 1)
-            upsampled_logits = nn.functional.softmax(upsampled_logits, dim=-1)
+            loss_logits = upsampled_logits.permute(0, 2, 3, 1)
+            loss_logits = nn.functional.softmax(loss_logits, dim=-1)
+            loss = loss_fct(loss_logits, labels)
         else:
-            loss_weights = torch.ones(num_classes).to(logits.device)
+            loss_weights = torch.ones(num_classes).to(upsampled_logits.device)
             loss_weights[background_index] = self.loss_params.background_loss_weight
             loss_fct = CrossEntropyLoss(weight=loss_weights)
+            loss = loss_fct(upsampled_logits, labels)
 
-        loss = loss_fct(upsampled_logits, labels)
         if self.loss_params.ratio_loss_weight > 0 and self.decode_heads[self.granularities[0]].max_class_sep:
             loss_fct2 = PrototypeRatioLoss(weight=self.loss_params.ratio_loss_weight, clamp_to=self.loss_params.clamp_to)
             loss += loss_fct2(upsampled_logits, labels)
@@ -95,13 +87,6 @@ class SegformerLightningModule(L.LightningModule):
         if self.loss_params.norm_penalty_weight > 0 and self.decode_heads[self.granularities[0]].hyperbolic:
             norm_penalty = hinge_norm_penalty(reprs)
             loss += self.loss_params.norm_penalty_weight * norm_penalty
-
-        if return_preds:
-            preds = torch.argmax(upsampled_logits, dim=-1 if self.loss_params.focal_loss else 1)
-            return {
-                "loss": loss,
-                "preds": preds,
-            }
         return loss
 
     def forward(self, pixel_values):
@@ -112,24 +97,23 @@ class SegformerLightningModule(L.LightningModule):
             return_dict=None,
         )
         encoder_hidden_states = outputs[1]
-        result = {}
+        logits = {}
+        reprs = {}
         # Compute logits for each granularity using the same backbone features
         for granularity in self.granularities:
-            logits, reprs = self.decode_heads[granularity](encoder_hidden_states, return_repr=True)
-            result[f"logits_{granularity}"] = logits
-            result[f"reprs_{granularity}"] = reprs
-        return result
+            head_result: HeadReturnType = self.decode_heads[granularity](encoder_hidden_states)
+            logits.update(head_result.logits)
+            reprs[granularity] = head_result.repr
+        return logits, reprs
 
     def training_step(self, batch, batch_idx):
-        outputs = self.forward(batch["pixel_values"])
+        logits, reprs = self.forward(batch["pixel_values"])
 
         loss = 0
         for granularity in self.granularities:
-            logits = outputs[f"logits_{granularity}"]
             labels = batch[f"labels_{granularity}"]
-            reprs = outputs[f"reprs_{granularity}"]
             loss += self.logits_to_loss(
-                logits, labels, reprs,
+                self.upsample_logits(logits[granularity], labels), labels, reprs,
                 num_labels_for_granularity(granularity),
                 background_class_for_granularity(granularity),
             )
@@ -138,25 +122,29 @@ class SegformerLightningModule(L.LightningModule):
         return loss
 
     def evaluation_step(self, batch, batch_idx, save_preds=False):
-        outputs = self.forward(batch["pixel_values"])
+        logits, reprs = self.forward(batch["pixel_values"])
+        upsampled_logits = {}
+        preds = {}
+        for granularity, logit in logits.items():
+            upsampled_logits[granularity] = self.upsample_logits(logit, batch[f"labels_{granularity}"])
+            preds[granularity] = torch.argmax(upsampled_logits[granularity], dim=-1 if self.loss_params.focal_loss else 1)
+
         eval_loss = 0
         for granularity in self.granularities:
-            logits = outputs[f"logits_{granularity}"]
-            labels = batch[f"labels_{granularity}"]
-            reprs = outputs[f"reprs_{granularity}"]
-            result = self.logits_to_loss(
-                logits, labels, reprs,
+            eval_loss += self.logits_to_loss(
+                upsampled_logits[granularity], batch[f"labels_{granularity}"], reprs,
                 num_labels_for_granularity(granularity),
                 background_class_for_granularity(granularity),
-                return_preds=True
             )
-            eval_loss += result["loss"]
-            self.jaccards[granularity].update(result["preds"], labels)
-            self.no_bg_jaccards[granularity].update(result["preds"], labels)
-            self.hierarchical_metrics[granularity].update(result["preds"], labels)
-            if save_preds:
-                self.test_preds[granularity].append(result["preds"].detach().cpu())
-                self.test_targets[granularity].append(labels.detach().cpu())
+
+            for computed_granularity in upsampled_logits:
+                these_labels = batch[f"labels_{computed_granularity}"]
+                these_preds = preds[computed_granularity]
+                self.jaccards[computed_granularity].update(these_preds, these_labels)
+                self.hierarchical_metrics[computed_granularity].update(these_preds, these_labels)
+                if save_preds:
+                    self.test_preds[computed_granularity].append(these_preds.detach().cpu())
+                    self.test_targets[computed_granularity].append(these_labels.detach().cpu())
         return eval_loss
 
     def validation_step(self, batch, batch_idx):
@@ -204,13 +192,10 @@ class SegformerLightningModule(L.LightningModule):
     def on_eval_epoch_end(self, prefix="val"):
         for granularity in self.granularities:
             metric = self.jaccards[granularity]
-            no_bg_metric = self.no_bg_jaccards[granularity]
             hierarchical_metric = self.hierarchical_metrics[granularity]
             self.log(f"{prefix}_mIoU_{granularity}", metric.compute(), prog_bar=True)
-            self.log(f"{prefix}_mIoU_no_bg_{granularity}", no_bg_metric.compute(), prog_bar=True)
             self.log(f"{prefix}_hierarchical_mIoU_{granularity}", hierarchical_metric.compute(), prog_bar=True)
             metric.reset()
-            no_bg_metric.reset()
             hierarchical_metric.reset()
 
     def on_validation_epoch_end(self):
@@ -219,6 +204,12 @@ class SegformerLightningModule(L.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
         return optimizer
+
+    @staticmethod
+    def upsample_logits(logits, labels):
+        return nn.functional.interpolate(
+            logits, size=labels.shape[-2:], mode="bilinear", align_corners=False
+        )
 
     @staticmethod
     def configure_hierarchical_metrics():
