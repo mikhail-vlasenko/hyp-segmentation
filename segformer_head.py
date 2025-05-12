@@ -88,13 +88,13 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
             for key in result.logits:
                 result.logits[key] = result.logits[key].permute(0, 3, 1, 2)
         else:
-            result.logits[self.primary_granularity] = self.classifier(hidden_states)
+            primary_logits = self.classifier(hidden_states)
             if self.max_class_sep:
                 # logits are of shape (batch, num_classes - 1, h, w)
                 # prototypes are of shape (num_classes, num_classes - 1)
                 # we want (batch, num_classes, h, w) on output
                 for key, value in self.prototypes.items():
-                    result.logits[key] = torch.einsum("bchw,nc->bnhw", result.logits[self.primary_granularity], value)
+                    result.logits[key] = torch.einsum("bchw,nc->bnhw", primary_logits, value)
             rep = hidden_states
         result.repr = rep
         return result
