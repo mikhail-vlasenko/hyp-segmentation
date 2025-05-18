@@ -24,6 +24,7 @@ class HeadKwargs:
     max_class_sep: bool = False
     tau: float = 0.1
     embeddings_paths: Dict[str, str] = field(default_factory=dict)
+    independent_heads: bool = False
 
 
 @dataclass
@@ -113,7 +114,9 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
 
         self.prototypes = {}
         for key, value in args.embeddings_paths.items():
-            self.prototypes[key] = torch.load(value).embeddings.weight.tensor
+            # independent_heads ensures there is at most one prototype set for each head
+            if not args.independent_heads or key == self.primary_granularity:
+                self.prototypes[key] = torch.load(value, weights_only=False).embeddings.weight.tensor
 
         if self.max_class_sep:
             if len(self.prototypes) > 0:

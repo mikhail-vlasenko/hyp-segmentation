@@ -51,8 +51,8 @@ class SegformerLightningModule(L.LightningModule):
             )
             for g in self.granularities
         })
-        
-        if len(self.granularities) > 1 and len(head_kwargs.embeddings_paths) > 0:
+
+        if len(self.granularities) > 1 and len(head_kwargs.embeddings_paths) > 0 and not head_kwargs.independent_heads:
             raise ValueError("Cannot use multiple heads with embeddings paths. (yet). Forward method will overwrite.")
         self.prediction_granularities = {
             *head_kwargs.embeddings_paths,  # implicitly .keys()
