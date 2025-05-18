@@ -4,12 +4,12 @@ from dataclasses import replace
 import torch
 import numpy as np
 import lightning as L
-from matplotlib import pyplot as plt
-from matplotlib.colors import ListedColormap
 from torch import nn
 from torch.nn import CrossEntropyLoss
-import seaborn as sns
-import sys
+# from matplotlib import pyplot as plt
+# from matplotlib.colors import ListedColormap
+# import seaborn as sns
+# import sys
 
 from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
 from focal_loss.focal_loss import FocalLoss
