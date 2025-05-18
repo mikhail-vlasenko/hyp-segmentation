@@ -4,8 +4,12 @@ from dataclasses import replace
 import torch
 import numpy as np
 import lightning as L
+from matplotlib import pyplot as plt
+from matplotlib.colors import ListedColormap
 from torch import nn
 from torch.nn import CrossEntropyLoss
+import seaborn as sns
+import sys
 
 from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
 from focal_loss.focal_loss import FocalLoss
@@ -145,6 +149,52 @@ class SegformerLightningModule(L.LightningModule):
                 if save_preds:
                     self.test_preds[computed_granularity].append(these_preds.detach().cpu())
                     self.test_targets[computed_granularity].append(these_labels.detach().cpu())
+        # # === DEBUG DUMP & EXIT ===
+        # if save_preds:
+        #     for g in self.prediction_granularities:
+        #         # take the second sample in batch
+        #         pred_mask = preds[g][1].detach().cpu().numpy().flatten()
+        #         gt_mask   = batch[f"labels_{g}"][1].detach().cpu().numpy().flatten()
+        #
+        #         num_classes = num_labels_for_granularity(g)
+        #         class_ids = np.arange(num_classes)
+        #
+        #         # compute counts
+        #         counts_pred = np.bincount(pred_mask, minlength=num_classes)
+        #         counts_gt   = np.bincount(gt_mask,   minlength=num_classes)
+        #
+        #         # get seaborn palette
+        #         palette = sns.color_palette("Accent", num_classes)
+        #
+        #         # 2 rows × 2 cols: [pred_img, gt_img] over [pred_hist, gt_hist]
+        #         fig, axs = plt.subplots(2, 2, figsize=(12, 10), dpi=300)
+        #
+        #         # top-left: predicted mask
+        #         axs[0, 0].imshow(pred_mask.reshape(batch["labels_"+g][1].shape), cmap="gray")
+        #         axs[0, 0].set_title(f"Predicted mask ({g})")
+        #         axs[0, 0].axis("off")
+        #
+        #         # top-right: ground-truth mask
+        #         axs[0, 1].imshow(gt_mask.reshape(batch["labels_"+g][1].shape), cmap="gray")
+        #         axs[0, 1].set_title(f"Ground-truth mask ({g})")
+        #         axs[0, 1].axis("off")
+        #
+        #         # bottom-left: pred distribution
+        #         sns.barplot(x=class_ids, y=counts_pred, palette=palette, ax=axs[1, 0])
+        #         axs[1, 0].set_title(f"Pred counts ({g})")
+        #         axs[1, 0].set_xlabel("Class ID")
+        #         axs[1, 0].set_ylabel("Frequency")
+        #
+        #         # bottom-right: gt distribution
+        #         sns.barplot(x=class_ids, y=counts_gt, palette=palette, ax=axs[1, 1])
+        #         axs[1, 1].set_title(f"GT counts ({g})")
+        #         axs[1, 1].set_xlabel("Class ID")
+        #         axs[1, 1].set_ylabel("Frequency")
+        #
+        #         fig.tight_layout()
+        #         plt.savefig(f"debug_preds_gt_hist_{g}.png")
+        #         plt.close(fig)
+        #     sys.exit(0)
         return eval_loss
 
     def validation_step(self, batch, batch_idx):
