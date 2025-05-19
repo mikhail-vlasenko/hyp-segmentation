@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
 import torch
+from hierarchy_embeddings.utils import load_hierarchy
 
 ATTR_CHAIN = "embeddings.weight.tensor"  # where the (N, 2) tensor lives
 
@@ -27,7 +28,7 @@ def load_embeddings(path: Path) -> np.ndarray:
 
 # ───────────────────────── Plotting core ───────────────────────────────────
 
-def plot_on_circle(embeds: np.ndarray, out_file: Path):
+def plot_on_circle(embeds: np.ndarray, hierarchy, out_file: Path):
     radius = np.linalg.norm(embeds, axis=1).max()
     fig, ax = plt.subplots(figsize=(6, 6), dpi=600)  # high‑res output
     ax.set_aspect("equal", "box")
@@ -35,6 +36,14 @@ def plot_on_circle(embeds: np.ndarray, out_file: Path):
     # reference circle
     theta = np.linspace(0, 2 * np.pi, 400)
     ax.plot(radius * np.cos(theta), radius * np.sin(theta), color="grey", linewidth=1)
+
+    # Draw edges first so they appear behind points
+    for edge in hierarchy.edges():
+        source_idx = edge[0]
+        target_idx = edge[1]
+        ax.plot([embeds[source_idx, 0], embeds[target_idx, 0]], 
+                [embeds[source_idx, 1], embeds[target_idx, 1]], 
+                color='lightgrey', linewidth=0.5, zorder=1)
 
     # points
     n = embeds.shape[0]
@@ -61,12 +70,22 @@ def plot_on_circle(embeds: np.ndarray, out_file: Path):
 # ────────────────────────────── Main ───────────────────────────────────────
 
 def main():
+    # Load hierarchy
+    hierarchy = load_hierarchy("spin_dataset", "spin_hierarchy")
+    
+    # Load embeddings
     PATH = Path(
         "hierarchy_embeddings/hierarchies/hierarchy_embeddings/experiments/"
-        "spin_dataset/spin_hierarchy/2025-04-28_232541/HierarchyEmbedding_weights_2.pth"
+        "spin_dataset/spin_hierarchy/2025-05-11_151726/HierarchyEmbedding_weights_2.pth"
     )
     embeds = load_embeddings(PATH)
-    plot_on_circle(embeds, Path("visualizations/plots/embedding_circle.png"))
+    
+    # Create output directory if it doesn't exist
+    out_dir = Path("visualizations/plots")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Plot with edges
+    plot_on_circle(embeds, hierarchy, out_dir / "embedding_circle.png")
 
 
 if __name__ == "__main__":
