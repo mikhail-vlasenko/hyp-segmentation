@@ -3,6 +3,7 @@ from pathlib import Path
 from pprint import pprint
 from typing import List, Optional
 
+import networkx as nx
 import numpy as np
 from spin import SPIN, file_to_object_mapping
 from PIL import Image
@@ -14,6 +15,7 @@ import torchvision.transforms.functional as TF
 from transformers import SegformerImageProcessor
 
 from hierarchy_embeddings.object_supercategory_mapping import OBJECT_SUPERCATEGORY_MAPPING
+from hierarchy_embeddings.utils import load_hierarchy
 from utils import background_class_for_granularity
 
 
@@ -57,7 +59,13 @@ class SPINSegmentationDataset(Dataset):
             processor,
             crop_size: Optional[int] = None,
             remap_objects: bool = False,
+            include_classes: List[int] = None,
+            remove_classes: List[int] = None,
     ):
+        # Ensure only one of include_classes or remove_classes is specified
+        assert not (include_classes and remove_classes), \
+            "Only one of include_classes or remove_classes can be non-empty, not both"
+        
         self.spin_api = SPIN(
             annotation_dir=annotation_dir,
             image_dir=image_dir,
@@ -67,6 +75,19 @@ class SPINSegmentationDataset(Dataset):
         self.granularities = granularities
         self.processor = processor
         self.image_ids = self.spin_api.getImgIds()
+        
+        # Filter images based on class inclusion/exclusion
+        if include_classes:
+            self.image_ids = [
+                img_id for img_id in self.image_ids 
+                if self.image_has_class(img_id, include_classes)
+            ]
+        elif remove_classes:
+            self.image_ids = [
+                img_id for img_id in self.image_ids 
+                if not self.image_has_class(img_id, remove_classes)
+            ]
+
         self.split = split
 
         if self.split == "train" and crop_size is not None:
@@ -125,6 +146,31 @@ class SPINSegmentationDataset(Dataset):
 
         return inputs
 
+    def image_has_class(self, image_id, class_ids):
+        """Check if an image contains any of the given class IDs without rasterizing masks."""
+        class_ids = np.array(class_ids)
+        
+
+        # For each granularity, check annotations directly
+        for granularity in self.granularities:
+            # Get the COCO API for this granularity
+            coco_api = self.spin_api.__getattribute__(granularity + "s")
+            
+            # Get all annotations for this image
+            ann_ids = coco_api.getAnnIds(imgIds=[image_id])
+            if not ann_ids:
+                continue
+                
+            # Check category IDs directly from annotations
+            anns = coco_api.loadAnns(ann_ids)
+            ann_classes = np.array([ann["category_id"] for ann in anns])
+            
+            if len(np.intersect1d(ann_classes, class_ids)) > 0:
+                return True
+                
+        return False
+
+
 
 class SPINDataModule(L.LightningDataModule):
     """
@@ -142,6 +188,8 @@ class SPINDataModule(L.LightningDataModule):
         crop_size=(0.8, 0.8),
         num_workers=4,
         remap_objects: bool = False,
+        hierarchy: nx.DiGraph = None,
+        zeroshot_class: Optional[str] = None,
     ):
         super().__init__()
         self.annotation_dir = annotation_dir
@@ -152,6 +200,12 @@ class SPINDataModule(L.LightningDataModule):
         self.crop_size = crop_size
         self.num_workers = num_workers
         self.remap_objects = remap_objects
+        self.zs_class_ids = []
+        if zeroshot_class:
+            for node_id in range(hierarchy.number_of_nodes()):
+                if zeroshot_class.lower() in hierarchy.nodes[node_id]["label"].lower():
+                    self.zs_class_ids.append(node_id)
+                    print(f"Found zeroshot class {hierarchy.nodes[node_id]['label']} with id {node_id}")
 
     def setup(self, stage=None):
         # Create train/val datasets
@@ -164,6 +218,7 @@ class SPINDataModule(L.LightningDataModule):
                 granularities=self.granularities,
                 crop_size=self.crop_size,
                 remap_objects=self.remap_objects,
+                remove_classes=self.zs_class_ids,
             )
         self.val_dataset = SPINSegmentationDataset(
             self.annotation_dir,
@@ -172,6 +227,7 @@ class SPINDataModule(L.LightningDataModule):
             granularities=["whole", "part", "subpart"],  # just put all of them here, sometimes used in eval
             processor=self.processor,
             remap_objects=self.remap_objects,
+            include_classes=self.zs_class_ids,
         )
         self.test_dataset = SPINSegmentationDataset(
             self.annotation_dir,
@@ -180,6 +236,7 @@ class SPINDataModule(L.LightningDataModule):
             granularities=["whole", "part", "subpart"],
             processor=self.processor,
             remap_objects=self.remap_objects,
+            include_classes=self.zs_class_ids,
         )
 
     def train_dataloader(self):

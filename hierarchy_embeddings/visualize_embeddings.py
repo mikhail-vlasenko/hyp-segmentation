@@ -51,7 +51,7 @@ def plot_on_circle(embeds: np.ndarray, hierarchy, out_file: Path):
     for i, (x, y) in enumerate(embeds):
         ax.scatter(x, y, color=cmap(i / (n - 1) if n > 1 else 0.5), s=30, zorder=3)
         ax.annotate(
-            str(i),
+            hierarchy.nodes[i]["label"],  # node name
             (x, y),
             xytext=(2, 2),
             textcoords="offset points",
@@ -71,12 +71,12 @@ def plot_on_circle(embeds: np.ndarray, hierarchy, out_file: Path):
 
 def main():
     # Load hierarchy
-    hierarchy = load_hierarchy("spin_dataset", "spin_hierarchy")
+    hierarchy = load_hierarchy("spin_dataset", "spin_hierarchy_part-first")
     
     # Load embeddings
     PATH = Path(
         "hierarchy_embeddings/hierarchies/hierarchy_embeddings/experiments/"
-        "spin_dataset/spin_hierarchy/2025-05-11_151726/HierarchyEmbedding_weights_2.pth"
+        "spin_dataset/spin_hierarchy_part-first/2025-05-22_163008/HierarchyEmbedding_weights_2.pth"
     )
     embeds = load_embeddings(PATH)
     
