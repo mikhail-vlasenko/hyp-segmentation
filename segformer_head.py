@@ -96,6 +96,8 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
                 # we want (batch, num_classes, h, w) on output
                 for key, value in self.prototypes.items():
                     result.logits[key] = torch.einsum("bchw,nc->bnhw", primary_logits, value)
+            else:
+                result.logits[self.primary_granularity] = primary_logits
             rep = hidden_states
         result.repr = rep
         return result
