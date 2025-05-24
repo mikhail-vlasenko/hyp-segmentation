@@ -48,7 +48,6 @@ def parse_args():
     parser.add_argument("--remap_objects", action="store_false", help="Remap object classes to coarse classes")
 
     # data configuration
-    parser.add_argument("--hierarchy_name", type=str, default=None, help="Name of the hierarchy, for example 'spin_hierarchy'")
     parser.add_argument("--zeroshot_class", type=str, default=None, help="Class name for zero-shot evaluation")
 
     parser.add_argument("--crop_size", type=float, nargs=2, default=(0.8, 0.8), help="Crop size as a fraction of image dimensions")
@@ -74,11 +73,6 @@ def main():
     processor = SegformerImageProcessor.from_pretrained(args.model_name)
     processor.do_reduce_labels = False
 
-    if args.hierarchy_name:
-        hierarchy = load_hierarchy("spin_dataset", args.hierarchy_name)
-    else:
-        hierarchy = None
-
     spin_dm = SPINDataModule(
         annotation_dir=dataset_annotation_dir,
         image_dir=dataset_image_dir,
@@ -88,7 +82,6 @@ def main():
         crop_size=args.crop_size,
         num_workers=args.num_workers,
         remap_objects=args.remap_objects,
-        hierarchy=hierarchy,
         zeroshot_class=args.zeroshot_class,
     )
 

@@ -188,7 +188,6 @@ class SPINDataModule(L.LightningDataModule):
         crop_size=(0.8, 0.8),
         num_workers=4,
         remap_objects: bool = False,
-        hierarchy: nx.DiGraph = None,
         zeroshot_class: Optional[str] = None,
     ):
         super().__init__()
@@ -202,10 +201,18 @@ class SPINDataModule(L.LightningDataModule):
         self.remap_objects = remap_objects
         self.zs_class_ids = []
         if zeroshot_class:
-            for node_id in range(hierarchy.number_of_nodes()):
-                if zeroshot_class.lower() in hierarchy.nodes[node_id]["label"].lower():
-                    self.zs_class_ids.append(node_id)
-                    print(f"Found zeroshot class {hierarchy.nodes[node_id]['label']} with id {node_id}")
+            assert self.granularities == ["part"], "Zeroshot class is only supported for part granularity"
+            spin_api = SPIN(
+                annotation_dir=annotation_dir,
+                image_dir=image_dir,
+                split="val",
+                download=False,
+            )
+            for cat_id, category in spin_api.parts.cats.items():
+                name = category["name"]
+                if zeroshot_class.lower() in name.lower():
+                    self.zs_class_ids.append(cat_id)
+                    print(f"Found zeroshot class {name} with id {cat_id}")
 
     def setup(self, stage=None):
         # Create train/val datasets
@@ -227,7 +234,7 @@ class SPINDataModule(L.LightningDataModule):
             granularities=["whole", "part", "subpart"],  # just put all of them here, sometimes used in eval
             processor=self.processor,
             remap_objects=self.remap_objects,
-            include_classes=self.zs_class_ids,
+            include_classes=self.zs_class_ids + [background_class_for_granularity(self.granularities[0])],
         )
         self.test_dataset = SPINSegmentationDataset(
             self.annotation_dir,
@@ -236,7 +243,7 @@ class SPINDataModule(L.LightningDataModule):
             granularities=["whole", "part", "subpart"],
             processor=self.processor,
             remap_objects=self.remap_objects,
-            include_classes=self.zs_class_ids,
+            include_classes=self.zs_class_ids + [background_class_for_granularity(self.granularities[0])],
         )
 
     def train_dataloader(self):
