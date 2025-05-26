@@ -38,7 +38,7 @@ def get_dataset() -> SPINSegmentationDataset:
     return SPINSegmentationDataset(
         annotation_dir=annotation_dir,
         image_dir=image_dir,
-        split="val",
+        split="test",
         granularities=granularities,
         processor=processor,
     )

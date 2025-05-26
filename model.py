@@ -151,49 +151,76 @@ class SegformerLightningModule(L.LightningModule):
                     self.test_targets[computed_granularity].append(these_labels.detach().cpu())
         # # === DEBUG DUMP & EXIT ===
         # if save_preds:
-        #     for g in self.prediction_granularities:
-        #         # take the second sample in batch
-        #         pred_mask = preds[g][1].detach().cpu().numpy().flatten()
-        #         gt_mask   = batch[f"labels_{g}"][1].detach().cpu().numpy().flatten()
+        #     import seaborn as sns
+        #     import matplotlib.pyplot as plt
+        #     import sys
+        #     # take xhikf8qc for usual level 2
+        #     # nifqp5yg for part first
+        #     for idx in range(len(batch["pixel_values"])):  # iterate over batch
+        #         for g in self.prediction_granularities:
+        #             # take the second sample in batch
+        #             pred_mask = preds[g][idx].detach().cpu().numpy().flatten()
+        #             gt_mask   = batch[f"labels_{g}"][idx].detach().cpu().numpy().flatten()
         #
-        #         num_classes = num_labels_for_granularity(g)
-        #         class_ids = np.arange(num_classes)
+        #             num_classes = num_labels_for_granularity(g)
+        #             class_ids = np.arange(num_classes)
         #
-        #         # compute counts
-        #         counts_pred = np.bincount(pred_mask, minlength=num_classes)
-        #         counts_gt   = np.bincount(gt_mask,   minlength=num_classes)
+        #             # compute counts
+        #             counts_pred = np.bincount(pred_mask, minlength=num_classes)
+        #             counts_gt   = np.bincount(gt_mask,   minlength=num_classes)
         #
-        #         # get seaborn palette
-        #         palette = sns.color_palette("Accent", num_classes)
+        #             # get seaborn palette
+        #             palette = sns.color_palette("Accent", num_classes)
         #
-        #         # 2 rows × 2 cols: [pred_img, gt_img] over [pred_hist, gt_hist]
-        #         fig, axs = plt.subplots(2, 2, figsize=(12, 10), dpi=300)
+        #             # 2 rows × 2 cols: [pred_img, gt_img] over [pred_hist, gt_hist]
+        #             fig, axs = plt.subplots(2, 2, figsize=(12, 10), dpi=300)
         #
-        #         # top-left: predicted mask
-        #         axs[0, 0].imshow(pred_mask.reshape(batch["labels_"+g][1].shape), cmap="gray")
-        #         axs[0, 0].set_title(f"Predicted mask ({g})")
-        #         axs[0, 0].axis("off")
+        #             # top-left: predicted mask
+        #             axs[0, 0].imshow(pred_mask.reshape(batch["labels_"+g][idx].shape), cmap="gray")
+        #             axs[0, 0].set_title(f"Predicted mask ({g})")
+        #             axs[0, 0].axis("off")
         #
-        #         # top-right: ground-truth mask
-        #         axs[0, 1].imshow(gt_mask.reshape(batch["labels_"+g][1].shape), cmap="gray")
-        #         axs[0, 1].set_title(f"Ground-truth mask ({g})")
-        #         axs[0, 1].axis("off")
+        #             # top-right: ground-truth mask
+        #             axs[0, 1].imshow(gt_mask.reshape(batch["labels_" + g][1].shape), cmap="gray")
+        #             axs[0, 1].set_title(f"Ground-truth mask ({g})")
+        #             axs[0, 1].axis("off")
         #
-        #         # bottom-left: pred distribution
-        #         sns.barplot(x=class_ids, y=counts_pred, palette=palette, ax=axs[1, 0])
-        #         axs[1, 0].set_title(f"Pred counts ({g})")
-        #         axs[1, 0].set_xlabel("Class ID")
-        #         axs[1, 0].set_ylabel("Frequency")
+        #             # bottom-left: pred distribution
+        #             sns.barplot(x=class_ids, y=counts_pred, hue=class_ids, palette=palette, legend=False, ax=axs[1, 0])
+        #             axs[1, 0].set_title(f"Pred counts ({g})")
+        #             axs[1, 0].set_xlabel("Class ID")
+        #             axs[1, 0].set_ylabel("Frequency")
+        #             axs[1, 0].set_yscale("log")
+        #             y_max = max(counts_pred.max(), counts_gt.max()) * 1.2
+        #             axs[1, 0].set_ylim(1, y_max)
         #
-        #         # bottom-right: gt distribution
-        #         sns.barplot(x=class_ids, y=counts_gt, palette=palette, ax=axs[1, 1])
-        #         axs[1, 1].set_title(f"GT counts ({g})")
-        #         axs[1, 1].set_xlabel("Class ID")
-        #         axs[1, 1].set_ylabel("Frequency")
+        #             tick_labels = []
+        #             for i, count in enumerate(counts_pred):
+        #                 if count > 0:
+        #                     tick_labels.append(f"$\\mathbf{{{i}}}$")
+        #                 else:
+        #                     tick_labels.append(str(i))
+        #             axs[1, 0].set_xticklabels(tick_labels)
         #
-        #         fig.tight_layout()
-        #         plt.savefig(f"debug_preds_gt_hist_{g}.png")
-        #         plt.close(fig)
+        #             # bottom-right: gt distribution
+        #             sns.barplot(x=class_ids, y=counts_gt, hue=class_ids, palette=palette, legend=False, ax=axs[1, 1])
+        #             axs[1, 1].set_title(f"GT counts ({g})")
+        #             axs[1, 1].set_xlabel("Class ID")
+        #             axs[1, 1].set_ylabel("Frequency")
+        #             axs[1, 1].set_yscale("log")
+        #             axs[1, 1].set_ylim(1, y_max)
+        #
+        #             tick_labels = []
+        #             for i, count in enumerate(counts_gt):
+        #                 if count > 0:
+        #                     tick_labels.append(f"$\\mathbf{{{i}}}$")
+        #                 else:
+        #                     tick_labels.append(str(i))
+        #             axs[1, 1].set_xticklabels(tick_labels)
+        #
+        #             fig.tight_layout()
+        #             plt.savefig(f"visualizations/plots/preds_hist/preds_gt_hist_{g}_{idx}.png")
+        #             plt.close(fig)
         #     sys.exit(0)
         return eval_loss
 

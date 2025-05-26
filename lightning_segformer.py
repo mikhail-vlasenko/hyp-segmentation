@@ -59,6 +59,9 @@ def parse_args():
 
 def main():
     args = parse_args()
+    # args.model_file = "hyperbolic-segmentation/nifqp5yg/checkpoints/epoch=49-step=24400.ckpt"
+    # args.batch_size = 8
+    # args.zeroshot_class = "Quadruped"
     DoRemapObjects.value = args.remap_objects
     dataset_annotation_dir = os.path.join(args.dataset_dir, "annotations")
     dataset_image_dir = os.path.join(args.dataset_dir, "images")
@@ -88,70 +91,69 @@ def main():
     if args.model_file:
         segformer_module = SegformerLightningModule.load_from_checkpoint(args.model_file)
         print(f"Loaded model from {args.model_file}")
-    else:
-        paths_dict = {}
-        if args.whole_embeddings_path:
-            paths_dict["whole"] = args.whole_embeddings_path
-        if args.part_embeddings_path:
-            paths_dict["part"] = args.part_embeddings_path
-        if args.subpart_embeddings_path:
-            paths_dict["subpart"] = args.subpart_embeddings_path
-        head_kwargs = HeadKwargs(
-            dim=args.head_dim,
-            hyperbolic=args.hyperbolic,
-            curvature=args.curvature,
-            max_class_sep=args.max_class_sep,
-            tau=args.tau,
-            embeddings_paths=paths_dict,
-            independent_heads=args.independent_heads,
-        )
-        loss_params = LossParams(
-            background_loss_weight=args.background_loss_weight,
-            focal_loss=args.focal_loss,
-            focal_loss_gamma=args.focal_loss_gamma,
-            ratio_loss_weight=args.ratio_loss_weight,
-            clamp_to=args.clamp_to,
-            norm_penalty_weight=args.norm_penalty_weight,
-        )
-        segformer_module = SegformerLightningModule(
-            model_name=args.model_name,
-            lr=args.learning_rate,
-            granularities=granularities,
-            head_kwargs=head_kwargs,
-            loss_params=loss_params,
-        )
-
-    if not args.model_file:
-        wandb_logger = WandbLogger(
-            project="hyperbolic-segmentation",
-            log_model=True,
-        )
-
-        wandb_logger.log_hyperparams(vars(args))
-
-        trainer = L.Trainer(
-            logger=wandb_logger,
-            max_epochs=args.num_epochs,
-            accelerator="auto",
-            devices="auto",
-            accumulate_grad_batches=args.accumulate_grad_batches,
-        )
-
-        trainer.fit(segformer_module, spin_dm)
-        trainer.test(segformer_module, spin_dm)
-
-        save_dir = "segformer-finetuned-spin"
-        os.makedirs(save_dir, exist_ok=True)
-
-        segformer_module.model.save_pretrained(save_dir)
-        processor.save_pretrained(save_dir)
-        wandb_logger.experiment.finish()
-    else:
         trainer = L.Trainer(
             accelerator="auto",
             devices="auto",
         )
         trainer.test(segformer_module, spin_dm)
+        exit()
+
+    paths_dict = {}
+    if args.whole_embeddings_path:
+        paths_dict["whole"] = args.whole_embeddings_path
+    if args.part_embeddings_path:
+        paths_dict["part"] = args.part_embeddings_path
+    if args.subpart_embeddings_path:
+        paths_dict["subpart"] = args.subpart_embeddings_path
+    head_kwargs = HeadKwargs(
+        dim=args.head_dim,
+        hyperbolic=args.hyperbolic,
+        curvature=args.curvature,
+        max_class_sep=args.max_class_sep,
+        tau=args.tau,
+        embeddings_paths=paths_dict,
+        independent_heads=args.independent_heads,
+    )
+    loss_params = LossParams(
+        background_loss_weight=args.background_loss_weight,
+        focal_loss=args.focal_loss,
+        focal_loss_gamma=args.focal_loss_gamma,
+        ratio_loss_weight=args.ratio_loss_weight,
+        clamp_to=args.clamp_to,
+        norm_penalty_weight=args.norm_penalty_weight,
+    )
+    segformer_module = SegformerLightningModule(
+        model_name=args.model_name,
+        lr=args.learning_rate,
+        granularities=granularities,
+        head_kwargs=head_kwargs,
+        loss_params=loss_params,
+    )
+
+    wandb_logger = WandbLogger(
+        project="hyperbolic-segmentation",
+        log_model=True,
+    )
+
+    wandb_logger.log_hyperparams(vars(args))
+
+    trainer = L.Trainer(
+        logger=wandb_logger,
+        max_epochs=args.num_epochs,
+        accelerator="auto",
+        devices="auto",
+        accumulate_grad_batches=args.accumulate_grad_batches,
+    )
+
+    trainer.fit(segformer_module, spin_dm)
+    trainer.test(segformer_module, spin_dm)
+
+    save_dir = "segformer-finetuned-spin"
+    os.makedirs(save_dir, exist_ok=True)
+
+    segformer_module.model.save_pretrained(save_dir)
+    processor.save_pretrained(save_dir)
+    wandb_logger.experiment.finish()
 
 
 if __name__ == "__main__":

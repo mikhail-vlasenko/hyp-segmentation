@@ -149,7 +149,6 @@ class SPINSegmentationDataset(Dataset):
     def image_has_class(self, image_id, class_ids):
         """Check if an image contains any of the given class IDs without rasterizing masks."""
         class_ids = np.array(class_ids)
-        
 
         # For each granularity, check annotations directly
         for granularity in self.granularities:
@@ -199,9 +198,11 @@ class SPINDataModule(L.LightningDataModule):
         self.crop_size = crop_size
         self.num_workers = num_workers
         self.remap_objects = remap_objects
+        self.eval_granularities = ["whole", "part", "subpart"]
         self.zs_class_ids = []
         if zeroshot_class:
             assert self.granularities == ["part"], "Zeroshot class is only supported for part granularity"
+            self.eval_granularities = ["part"]
             spin_api = SPIN(
                 annotation_dir=annotation_dir,
                 image_dir=image_dir,
@@ -231,19 +232,19 @@ class SPINDataModule(L.LightningDataModule):
             self.annotation_dir,
             self.image_dir,
             split="val",
-            granularities=["whole", "part", "subpart"],  # just put all of them here, sometimes used in eval
+            granularities=self.eval_granularities,
             processor=self.processor,
             remap_objects=self.remap_objects,
-            include_classes=self.zs_class_ids + [background_class_for_granularity(self.granularities[0])],
+            include_classes=self.zs_class_ids,
         )
         self.test_dataset = SPINSegmentationDataset(
             self.annotation_dir,
             self.image_dir,
             split="test",
-            granularities=["whole", "part", "subpart"],
+            granularities=self.eval_granularities,
             processor=self.processor,
             remap_objects=self.remap_objects,
-            include_classes=self.zs_class_ids + [background_class_for_granularity(self.granularities[0])],
+            include_classes=self.zs_class_ids,
         )
 
     def train_dataloader(self):
