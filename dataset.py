@@ -273,3 +273,7 @@ class SPINDataModule(L.LightningDataModule):
             num_workers=self.num_workers,
             persistent_workers=True,
         )
+
+    def get_zeroshot_class_ids(self):
+        """Return the class IDs for the zeroshot class."""
+        return self.zs_class_ids

@@ -7,6 +7,11 @@ import torch
 from hierarchy_embeddings.utils import load_hierarchy
 
 ATTR_CHAIN = "embeddings.weight.tensor"  # where the (N, 2) tensor lives
+CATEGORIES = [
+    "Background",
+    "Quadruped", "Biped", "Fish", "Bird", "Snake",
+    "Reptile", "Car", "Bicycle", "Boat", "Aeroplane", "Bottle",
+]
 
 # ─────────────────────────── Utilities ─────────────────────────────────────
 
@@ -46,12 +51,27 @@ def plot_on_circle(embeds: np.ndarray, hierarchy, out_file: Path):
                 color='lightgrey', linewidth=0.5, zorder=1)
 
     # points
-    n = embeds.shape[0]
+    n = len(CATEGORIES) - 1
     cmap = cm.get_cmap("rainbow", n)  # rainbow spectrum
     for i, (x, y) in enumerate(embeds):
-        ax.scatter(x, y, color=cmap(i / (n - 1) if n > 1 else 0.5), s=30, zorder=3)
+        node_name = hierarchy.nodes[i]["label"]
+        idx = None
+        for cat in CATEGORIES:
+            if cat in node_name:
+                idx = CATEGORIES.index(cat) - 1  # -1 to skip "Background"
+                break
+        if idx is None:
+            color = "black"  # default color for unclassified nodes
+            marker = "x"  # different marker for unclassified nodes
+        elif idx == -1:
+            color = "black"  # Background color
+            marker = 'o'
+        else:
+            color = cmap(idx)
+            marker = 'o'  # use circle marker for all other nodes
+        ax.scatter(x, y, color=color, s=30, zorder=3, marker=marker)
         ax.annotate(
-            hierarchy.nodes[i]["label"],  # node name
+            node_name,  # node name
             (x, y),
             xytext=(2, 2),
             textcoords="offset points",
@@ -74,18 +94,14 @@ def main():
     hierarchy = load_hierarchy("spin_dataset", "spin_hierarchy_part-first")
     
     # Load embeddings
-    PATH = Path(
+    path = Path(
         "hierarchy_embeddings/hierarchies/hierarchy_embeddings/experiments/"
-        "spin_dataset/spin_hierarchy_part-first/2025-05-22_163008/HierarchyEmbedding_weights_2.pth"
+        "spin_dataset/spin_hierarchy_part-first/2025-05-22_163008"
     )
-    embeds = load_embeddings(PATH)
-    
-    # Create output directory if it doesn't exist
-    out_dir = Path("visualizations/plots")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    embeds = load_embeddings(path / "HierarchyEmbedding_weights_2.pth")
     
     # Plot with edges
-    plot_on_circle(embeds, hierarchy, out_dir / "embedding_circle.png")
+    plot_on_circle(embeds, hierarchy, path / "embedding_circle.png")
 
 
 if __name__ == "__main__":

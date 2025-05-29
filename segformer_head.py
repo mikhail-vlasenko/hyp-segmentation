@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Union, Tuple, Dict
+from typing import Union, Tuple, Dict, List, Optional
 
 import torch
 from torch import nn
@@ -12,7 +12,7 @@ from transformers import SegformerDecodeHead
 from embedding_space import EmbeddingSpace
 from hyperbolic_layers import fast_dist
 from prototypes import create_prototypes
-from utils import num_labels_for_granularity
+from utils import num_labels_for_granularity, background_class_for_granularity
 
 
 @dataclass
@@ -25,6 +25,7 @@ class HeadKwargs:
     tau: float = 0.1
     embeddings_paths: Dict[str, str] = field(default_factory=dict)
     independent_heads: bool = False
+    zeroshot_class_indices: Optional[List[int]] = None
 
 
 @dataclass
@@ -82,6 +83,9 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
                 rep_shape = rep.shape
                 rep = rep.view(-1, rep.shape[-1])
                 for key, value in self.prototypes.items():
+                    if eval_mode and len(self.eval_prototypes) > 0:
+                        # zeroshot eval
+                        value = self.eval_prototypes[key]
                     result.logits[key] = self.prototypes_logits(rep, rep_shape, value)
             else:
                 embedding_space = EmbeddingSpace(self.offsets, self.normals, self.curvature)
@@ -115,12 +119,13 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
         self.num_classes = num_labels_for_granularity(self.primary_granularity)
 
         self.prototypes = {}
+        self.eval_prototypes = {}
         for key, value in args.embeddings_paths.items():
             # independent_heads ensures there is at most one prototype set for each head
             if not args.independent_heads or key == self.primary_granularity:
                 # value = value.replace("/home/mvlasenko/hyperbolic/hyp-segmentation/h_embeds/",
                 #               "hierarchy_embeddings/hierarchies/hierarchy_embeddings/experiments/spin_dataset/spin_hierarchy_part-first/")
-                self.prototypes[key] = torch.load(value, weights_only=False).embeddings.weight.tensor
+                self.prototypes[key] = torch.load(value, weights_only=False).embeddings.weight.tensor.requires_grad_(False)
 
         if self.max_class_sep:
             if len(self.prototypes) > 0:
@@ -139,9 +144,17 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
             for key, value in self.prototypes.items():
                 if self.hyperbolic:
                     value = value.unsqueeze(1)
+                if args.zeroshot_class_indices:
+                    eval_protos = self.prototypes[key].clone()
+                    self.prototypes[key][args.zeroshot_class_indices] = 0.0
+                    train_only_indices = list(set(range(eval_protos.shape[0])) - set(args.zeroshot_class_indices))
+                    train_only_indices.remove(background_class_for_granularity(key))  # keep the background class
+                    eval_protos[train_only_indices] = 0.0
+                    self.eval_prototypes[key] = torch.nn.Parameter(eval_protos, requires_grad=False)
                 self.prototypes[key] = torch.nn.Parameter(value, requires_grad=False)
 
             self.prototypes = nn.ParameterDict(self.prototypes)
+            self.eval_prototypes = nn.ParameterDict(self.eval_prototypes)
 
         self.curvature = args.curvature
         self.ball = gt.PoincareBall(c=self.curvature)

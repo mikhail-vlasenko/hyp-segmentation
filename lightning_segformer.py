@@ -113,6 +113,7 @@ def main():
         tau=args.tau,
         embeddings_paths=paths_dict,
         independent_heads=args.independent_heads,
+        zeroshot_class_indices=spin_dm.get_zeroshot_class_ids()
     )
     loss_params = LossParams(
         background_loss_weight=args.background_loss_weight,
