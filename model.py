@@ -93,7 +93,7 @@ class SegformerLightningModule(L.LightningModule):
             loss += self.loss_params.norm_penalty_weight * norm_penalty
         return loss
 
-    def forward(self, pixel_values):
+    def forward(self, pixel_values, eval_mode=False):
         outputs = self.backbone(
             pixel_values,
             output_attentions=None,
@@ -105,7 +105,7 @@ class SegformerLightningModule(L.LightningModule):
         reprs = {}
         # Compute logits for each granularity using the same backbone features
         for granularity in self.granularities:
-            head_result: HeadReturnType = self.decode_heads[granularity](encoder_hidden_states)
+            head_result: HeadReturnType = self.decode_heads[granularity](encoder_hidden_states, eval_mode)
             logits.update(head_result.logits)
             reprs[granularity] = head_result.repr
         return logits, reprs
@@ -126,7 +126,7 @@ class SegformerLightningModule(L.LightningModule):
         return loss
 
     def evaluation_step(self, batch, batch_idx, save_preds=False):
-        logits, reprs = self.forward(batch["pixel_values"])
+        logits, reprs = self.forward(batch["pixel_values"], eval_mode=True)
         upsampled_logits = {}
         preds = {}
         for granularity, logit in logits.items():
@@ -154,8 +154,6 @@ class SegformerLightningModule(L.LightningModule):
         #     import seaborn as sns
         #     import matplotlib.pyplot as plt
         #     import sys
-        #     # take xhikf8qc for usual level 2
-        #     # nifqp5yg for part first
         #     for idx in range(len(batch["pixel_values"])):  # iterate over batch
         #         for g in self.prediction_granularities:
         #             # take the second sample in batch

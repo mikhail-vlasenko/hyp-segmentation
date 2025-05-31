@@ -83,10 +83,13 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
                 rep_shape = rep.shape
                 rep = rep.view(-1, rep.shape[-1])
                 for key, value in self.prototypes.items():
-                    if eval_mode and len(self.eval_prototypes) > 0:
-                        # zeroshot eval
-                        value = self.eval_prototypes[key]
-                    result.logits[key] = self.prototypes_logits(rep, rep_shape, value)
+                    ignore_indices = None
+                    if self.zeroshot_class_indices:
+                        if eval_mode:
+                            ignore_indices = self.train_only_indices
+                        else:
+                            ignore_indices = self.zeroshot_class_indices
+                    result.logits[key] = self.prototypes_logits(rep, rep_shape, value, ignore_indices)
             else:
                 embedding_space = EmbeddingSpace(self.offsets, self.normals, self.curvature)
                 result.logits[self.primary_granularity] = embedding_space.run_log_torch(rep, self.offsets, self.normals, self.curvature)
@@ -117,14 +120,17 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
         self.hyperbolic = args.hyperbolic
         self.primary_granularity = args.primary_granularity
         self.num_classes = num_labels_for_granularity(self.primary_granularity)
+        self.zeroshot_class_indices = args.zeroshot_class_indices or []
+        self.train_only_indices = list(set(range(self.num_classes)) - set(self.zeroshot_class_indices))
+        self.train_only_indices.remove(background_class_for_granularity(self.primary_granularity))  # bg is not train-only
 
         self.prototypes = {}
         self.eval_prototypes = {}
         for key, value in args.embeddings_paths.items():
             # independent_heads ensures there is at most one prototype set for each head
             if not args.independent_heads or key == self.primary_granularity:
-                # value = value.replace("/home/mvlasenko/hyperbolic/hyp-segmentation/h_embeds/",
-                #               "hierarchy_embeddings/hierarchies/hierarchy_embeddings/experiments/spin_dataset/spin_hierarchy_part-first/")
+                value = value.replace("/home/mvlasenko/hyperbolic/hyp-segmentation/h_embeds/",
+                              "hierarchy_embeddings/hierarchies/hierarchy_embeddings/experiments/spin_dataset/spin_hierarchy/")
                 self.prototypes[key] = torch.load(value, weights_only=False).embeddings.weight.tensor.requires_grad_(False)
 
         if self.max_class_sep:
@@ -144,17 +150,9 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
             for key, value in self.prototypes.items():
                 if self.hyperbolic:
                     value = value.unsqueeze(1)
-                if args.zeroshot_class_indices:
-                    eval_protos = self.prototypes[key].clone()
-                    self.prototypes[key][args.zeroshot_class_indices] = 0.0
-                    train_only_indices = list(set(range(eval_protos.shape[0])) - set(args.zeroshot_class_indices))
-                    train_only_indices.remove(background_class_for_granularity(key))  # keep the background class
-                    eval_protos[train_only_indices] = 0.0
-                    self.eval_prototypes[key] = torch.nn.Parameter(eval_protos, requires_grad=False)
                 self.prototypes[key] = torch.nn.Parameter(value, requires_grad=False)
 
             self.prototypes = nn.ParameterDict(self.prototypes)
-            self.eval_prototypes = nn.ParameterDict(self.eval_prototypes)
 
         self.curvature = args.curvature
         self.ball = gt.PoincareBall(c=self.curvature)
@@ -191,6 +189,9 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
 
         return segformer_decode_head
 
-    def prototypes_logits(self, rep: torch.Tensor, rep_shape, prototypes) -> torch.Tensor:
+    def prototypes_logits(self, rep: torch.Tensor, rep_shape, prototypes, ignore_indices = None) -> torch.Tensor:
         distances = fast_dist(rep, prototypes, self.ball.k).T
+        if ignore_indices is not None:
+            # set distances to inf for ignored indices
+            distances[:, ignore_indices] = 10.0  # should be large enough for another prototype to be chosen
         return (-1 * distances * self.tau).reshape(*rep_shape[:-1], prototypes.shape[0])
