@@ -192,6 +192,8 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
     def prototypes_logits(self, rep: torch.Tensor, rep_shape, prototypes, ignore_indices = None) -> torch.Tensor:
         distances = fast_dist(rep, prototypes, self.ball.k).T
         if ignore_indices is not None:
-            # set distances to inf for ignored indices
-            distances[:, ignore_indices] = 10.0  # should be large enough for another prototype to be chosen
+            if self.hyperbolic:
+                distances[:, ignore_indices] = 10.0  # should be large enough for another prototype to be chosen
+            else:
+                distances[:, ignore_indices] = float("inf")  # ignore these indices in the distance computation
         return (-1 * distances * self.tau).reshape(*rep_shape[:-1], prototypes.shape[0])
