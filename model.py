@@ -59,10 +59,13 @@ class SegformerLightningModule(L.LightningModule):
             *self.granularities
         }
 
+        ignore_bg_metric = self.loss_params.background_loss_weight == 0.0
+        if ignore_bg_metric:
+            print("Background class will be ignored in metrics computation. ")
         self.jaccards = nn.ModuleDict({
             g: MulticlassJaccardIndex(
                 num_classes=num_labels_for_granularity(g),
-                ignore_index=None
+                ignore_index=background_class_for_granularity(g) if ignore_bg_metric else None,
             )
             for g in self.prediction_granularities
         })
