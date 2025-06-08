@@ -26,6 +26,7 @@ class HeadKwargs:
     embeddings_paths: Dict[str, str] = field(default_factory=dict)
     independent_heads: bool = False
     zeroshot_class_indices: Optional[List[int]] = None
+    euclidian_scale: float = 1.0
 
 
 @dataclass
@@ -150,6 +151,8 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
             for key, value in self.prototypes.items():
                 if self.hyperbolic:
                     value = value.unsqueeze(1)
+                else:
+                    value = value * args.euclidian_scale
                 self.prototypes[key] = torch.nn.Parameter(value, requires_grad=False)
 
             self.prototypes = nn.ParameterDict(self.prototypes)

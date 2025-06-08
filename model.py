@@ -6,10 +6,6 @@ import numpy as np
 import lightning as L
 from torch import nn
 from torch.nn import CrossEntropyLoss
-# from matplotlib import pyplot as plt
-# from matplotlib.colors import ListedColormap
-# import seaborn as sns
-# import sys
 
 from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
 from focal_loss.focal_loss import FocalLoss

@@ -29,6 +29,7 @@ def parse_args():
     parser.add_argument("--head_dim", type=int, default=None, help="Dimension reduction in the decode head")
     parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate")
     parser.add_argument("--independent_heads", action="store_true", help="Use different head types for different granularities. Disables cross-level prediction even if multiple embedding paths are specified.")
+    parser.add_argument("--euclidian_scale", type=float, default=1., help="Factor to scale the prototypes by for euclidian.")
     # losses configuration
     parser.add_argument("--background_loss_weight", type=float, default=1.0, help="Weight for the background class in the cross-entropy loss")
     parser.add_argument("--focal_loss", action="store_true", help="Use focal loss for training instead of cross-entropy")
@@ -113,7 +114,8 @@ def main():
         tau=args.tau,
         embeddings_paths=paths_dict,
         independent_heads=args.independent_heads,
-        zeroshot_class_indices=spin_dm.get_zeroshot_class_ids()
+        zeroshot_class_indices=spin_dm.get_zeroshot_class_ids(),
+        euclidian_scale=args.euclidian_scale,
     )
     loss_params = LossParams(
         background_loss_weight=args.background_loss_weight,
