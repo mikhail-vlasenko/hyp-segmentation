@@ -7,6 +7,8 @@ from lightning.pytorch.loggers import WandbLogger
 from transformers import SegformerImageProcessor
 
 from dataset import SPINDataModule
+from pascal_voc_dataset import PascalVOCDataModule
+from pascal_voc_callback import PascalVOCValidationCallback
 from hierarchy_embeddings.utils import load_hierarchy
 from losses import LossParams
 from model import SegformerLightningModule
@@ -50,6 +52,7 @@ def parse_args():
 
     # data configuration
     parser.add_argument("--zeroshot_class", type=str, default=None, help="Class name for zero-shot evaluation")
+    parser.add_argument("--pascal_voc_root", type=str, default=None, help="Path to Pascal VOC dataset root (e.g., /path/to/VOCdevkit/VOC2012)")
 
     parser.add_argument("--crop_size", type=float, nargs=2, default=(0.8, 0.8), help="Crop size as a fraction of image dimensions")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -89,6 +92,18 @@ def main():
         zeroshot_class=args.zeroshot_class,
     )
 
+    # Create Pascal VOC datamodule if path is provided
+    pascal_voc_dm = None
+    if args.pascal_voc_root:
+        print(f"Adding Pascal VOC validation from: {args.pascal_voc_root}")
+        pascal_voc_dm = PascalVOCDataModule(
+            voc_root=args.pascal_voc_root,
+            processor=processor,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+        )
+        pascal_voc_dm.setup()
+
     if args.model_file:
         segformer_module = SegformerLightningModule.load_from_checkpoint(args.model_file)
         print(f"Loaded model from {args.model_file}")
@@ -96,7 +111,10 @@ def main():
             accelerator="auto",
             devices="auto",
         )
-        trainer.test(segformer_module, spin_dm)
+        test_dataloaders = [spin_dm.test_dataloader()]
+        if pascal_voc_dm:
+            test_dataloaders.append(pascal_voc_dm.test_dataloader())
+        trainer.test(segformer_module, test_dataloaders)
         exit()
 
     paths_dict = {}
@@ -140,12 +158,19 @@ def main():
 
     wandb_logger.log_hyperparams(vars(args))
 
+    # Setup callbacks
+    callbacks = []
+    if pascal_voc_dm:
+        pascal_voc_callback = PascalVOCValidationCallback(pascal_voc_dm.val_dataloader())
+        callbacks.append(pascal_voc_callback)
+
     trainer = L.Trainer(
         logger=wandb_logger,
         max_epochs=args.num_epochs,
         accelerator="auto",
         devices="auto",
         accumulate_grad_batches=args.accumulate_grad_batches,
+        callbacks=callbacks,
     )
 
     trainer.fit(segformer_module, spin_dm)
