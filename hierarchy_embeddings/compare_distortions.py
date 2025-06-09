@@ -60,6 +60,7 @@ def plot_distortion_difference(diff_mat, node_permutation, output_path):
     
     # Use a diverging colormap to show positive and negative differences
     sn.heatmap(df_cm, cmap='RdBu_r', center=0)
+    plt.tight_layout()
     
     plt.title('Difference in Distortions (Loss Power 3 - Standard)', fontsize=16)
     plt.xlabel('Node Index', fontsize=12)
@@ -73,8 +74,8 @@ def plot_distortion_difference(diff_mat, node_permutation, output_path):
 if __name__ == "__main__":
     # Paths to the embedding files
     common = "/home/misha/projects/hyp-segmentation/hierarchy_embeddings/hierarchies/hierarchy_embeddings/experiments/spin_dataset/spin_hierarchy/"
-    standard_path = common + "2025-03-28_011533/HierarchyEmbedding_weights_64.pth"
-    loss_power3_path = common + "2025-04-14_204854/HierarchyEmbedding_weights_64.pth"
+    standard_path = common + "2025-06-09_184349/HierarchyEmbedding_weights_16.pth"
+    loss_power3_path = common + "2025-06-09_183232/HierarchyEmbedding_weights_16.pth"
     
     # Load the hierarchy
     hierarchy = load_hierarchy(dataset="spin_dataset", hierarchy_name="spin_hierarchy")

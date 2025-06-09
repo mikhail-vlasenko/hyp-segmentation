@@ -65,9 +65,6 @@ class HierarchyEmbedding(Module):
             if node not in visited:
                 node_order.append(node)
         
-        # Create a mapping from node to its position in the ordering
-        node_to_idx = {node: i for i, node in enumerate(node_order)}
-        
         # Initialize embeddings in a circular pattern
         num_nodes = len(node_order)
         
@@ -75,47 +72,19 @@ class HierarchyEmbedding(Module):
             for i, node in enumerate(node_order):
                 # Calculate angle for circular placement
                 angle = 2 * math.pi * i / num_nodes
-                
+                radius = 0.8
+                x = radius * math.cos(angle)
+                y = radius * math.sin(angle)
+
                 if self.embedding_dim == 2:
-                    # For 2D embeddings, place directly on circle
-                    radius = 0.8  # Stay within Poincare ball bounds
-                    x = radius * math.cos(angle)
-                    y = radius * math.sin(angle)
-                    self.embeddings.weight.tensor[node] = torch.tensor([x, y], dtype=torch.float32)
-                
-                elif self.embedding_dim == 3:
-                    # For 3D embeddings, place on circle in xy-plane with z varying by depth
-                    radius = 0.7
-                    # Calculate depth in hierarchy for z-coordinate
-                    try:
-                        # Try to get shortest path from root to determine depth
-                        depth = 0
-                        for root in roots:
-                            try:
-                                path_length = nx.shortest_path_length(self.hierarchy, root, node)
-                                depth = max(depth, path_length)
-                            except nx.NetworkXNoPath:
-                                continue
-                        z = 0.1 * depth  # Scale depth to small z values
-                    except:
-                        z = 0.0
-                    
-                    x = radius * math.cos(angle)
-                    y = radius * math.sin(angle)
-                    self.embeddings.weight.tensor[node] = torch.tensor([x, y, z], dtype=torch.float32)
-                
+                    embedding = torch.tensor([x, y], dtype=torch.float32)
                 else:
                     # For higher dimensions, fill first two dims with circle, rest with small values
-                    embedding = torch.zeros(self.embedding_dim, dtype=torch.float32)
-                    radius = 0.7
+                    embedding = torch.FloatTensor(self.embedding_dim).uniform_(-0.001, 0.001)
                     embedding[0] = radius * math.cos(angle)
                     embedding[1] = radius * math.sin(angle)
                     
-                    # Fill remaining dimensions with small random values
-                    if self.embedding_dim > 2:
-                        embedding[2:] = torch.randn(self.embedding_dim - 2) * 0.1
-                    
-                    self.embeddings.weight.tensor[node] = embedding
+                self.embeddings.weight.tensor[node] = embedding
 
     @staticmethod
     def load(state_dict: dict) -> "HierarchyEmbedding":
