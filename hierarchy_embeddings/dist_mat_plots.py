@@ -23,6 +23,7 @@ def create_dist_mat_plots(
     fig = plt.figure(figsize=(10, 8), dpi=300)
     sn.set(font_scale=0.5)
     sn.heatmap(df_cm)
+    plt.tight_layout()
     fig.savefig(os.path.join(output_dir, f"{file_name}.png"))
     plt.clf()
 
@@ -44,5 +45,6 @@ def create_dist_diff_mat_plots(
     fig = plt.figure(figsize=(10, 8), dpi=300)
     sn.set(font_scale=0.5)
     sn.heatmap(df_cm, vmin=0, vmax=1.5)
+    plt.tight_layout()
     fig.savefig(os.path.join(output_dir, f"prototype_edge_distortions.png"))
     plt.clf()

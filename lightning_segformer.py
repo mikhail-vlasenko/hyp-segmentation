@@ -30,6 +30,7 @@ def parse_args():
     parser.add_argument("--tau", type=float, default=10., help="Temperature parameter for class separation with prototypes in hyperbolic space")
     parser.add_argument("--head_dim", type=int, default=None, help="Dimension reduction in the decode head")
     parser.add_argument("--learning_rate", type=float, default=2e-4, help="Learning rate")
+    parser.add_argument("--poly_decay_power", type=float, default=1.0, help="Power for polynomial learning rate decay (1.0 = linear decay)")
     parser.add_argument("--independent_heads", action="store_true", help="Use different head types for different granularities. Disables cross-level prediction even if multiple embedding paths are specified.")
     parser.add_argument("--euclidian_scale", type=float, default=1., help="Factor to scale the prototypes by for euclidian.")
     # losses configuration
@@ -149,6 +150,8 @@ def main():
         granularities=granularities,
         head_kwargs=head_kwargs,
         loss_params=loss_params,
+        num_epochs=args.num_epochs,
+        poly_decay_power=args.poly_decay_power,
     )
 
     wandb_logger = WandbLogger(

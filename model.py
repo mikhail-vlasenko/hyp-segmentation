@@ -27,6 +27,8 @@ class SegformerLightningModule(L.LightningModule):
         granularities: list[str],
         head_kwargs: HeadKwargs,
         loss_params: LossParams,
+        num_epochs: int = 10,
+        poly_decay_power: float = 1.0,
     ):
         super().__init__()
         # Save all hyperparameters so they can be later accessed via self.hparams
@@ -39,6 +41,8 @@ class SegformerLightningModule(L.LightningModule):
         self.lr = lr
         self.granularities = granularities
         self.loss_params = loss_params
+        self.num_epochs = num_epochs
+        self.poly_decay_power = poly_decay_power
 
         self.decode_heads = nn.ModuleDict({
             g: HyperbolicSegformerDecodeHead.from_segformer_decode_head(
@@ -277,7 +281,21 @@ class SegformerLightningModule(L.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        return optimizer
+        
+        # Polynomial learning rate scheduler
+        def poly_lr_lambda(epoch):
+            return (1 - epoch / self.num_epochs) ** self.poly_decay_power
+        
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=poly_lr_lambda)
+        
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "epoch",
+                "frequency": 1,
+            },
+        }
 
     @staticmethod
     def upsample_logits(logits, labels):

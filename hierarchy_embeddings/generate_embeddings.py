@@ -77,7 +77,7 @@ def get_arg_parser():
     parser.add_argument("-c", "--curvature", type=float, default=1.0,
                         help="Curvature of the manifold (before containing function)", )
     # doesn't seem to change much between 64 and 256
-    parser.add_argument("-e", "--embedding-dim", type=int, default=2, help="Embedding dimension")
+    parser.add_argument("-e", "--embedding-dim", type=int, default=64, help="Embedding dimension")
     parser.add_argument("--pretrain-lr", type=float, default=5.0,
                         help="Learning rate used for pretraining embeddings with PE loss", )
     parser.add_argument("--pretrain-epochs", type=int, default=100,
