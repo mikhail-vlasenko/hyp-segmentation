@@ -15,6 +15,7 @@ from transformers import SegformerImageProcessor
 from dataset import SPINSegmentationDataset
 from hierarchy_embeddings.class_remapping import COARSE_CLASSES
 from hierarchy_embeddings.object_supercategory_mapping import OBJECT_SUPERCATEGORY_MAPPING
+from utils import background_class_for_granularity, DoRemapObjects
 
 ALLOWED_GRANULARITIES: tuple[str, ...] = ("whole", "part", "subpart")
 
@@ -38,9 +39,10 @@ def get_dataset() -> SPINSegmentationDataset:
     return SPINSegmentationDataset(
         annotation_dir=annotation_dir,
         image_dir=image_dir,
-        split="test",
+        split="train",
         granularities=granularities,
         processor=processor,
+        remap_objects=True,
     )
 
 ###############################################################################
@@ -60,14 +62,15 @@ def _stable_color_for_label(label: int) -> tuple[int, int, int]:
     return tuple(rng.randrange(32, 224) for _ in range(3))  # avoid extremes
 
 
-def _colorise_mask(mask: Image.Image) -> Image.Image:
+def _colorise_mask(mask: Image.Image, granularity) -> Image.Image:
     """Convert a single‑channel segmentation mask to an RGB image."""
     arr = np.array(mask, dtype=np.int64)
     h, w = arr.shape
     colour = np.zeros((h, w, 3), dtype=np.uint8)
 
     for label in np.unique(arr):
-        if label == 0:  # background
+        if label == background_class_for_granularity(granularity):  # background
+            print(f"Skipping background label {label} in granularity {granularity}")
             continue
         colour[arr == label] = _stable_color_for_label(int(label))
     return Image.fromarray(colour)
@@ -151,14 +154,13 @@ async def get_overlay(
     img = dataset.spin_api.get_image(image_id)
     mask = dataset.get_segmentation_map(image_id, granularity)
     if granularity == "whole":
-        whole_lut = np.asarray(OBJECT_SUPERCATEGORY_MAPPING + [11], dtype=np.int16)
-        mask = whole_lut[mask]
+        DoRemapObjects.value = True
 
-    mask_rgb = _colorise_mask(mask)
+    mask_rgb = _colorise_mask(mask, granularity)
     blended = _blend(img, mask_rgb, alpha=alpha)
 
     buf = io.BytesIO()
-    blended.save(buf, format="JPEG", quality=90)
+    mask_rgb.save(buf, format="JPEG", quality=90)
     buf.seek(0)
     return StreamingResponse(buf, media_type="image/jpeg")
 

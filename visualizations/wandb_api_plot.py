@@ -14,25 +14,56 @@ import matplotlib.pyplot as plt
 # TARGET_IDS = {204, 205, 208, 209}  # dim 16
 # TARGET_IDS = {210, 211, 212, 213}  # dim 4
 
-# TITLE = "Zero-shot segmentation performance"
-# RUN_GROUPS = [
-#     ([384, 385], "Euclidian. dim=4"),
-#     ([386, 387], "Standard hier. dim=4"),
-#     ([390, 388], "Part-first hier. dim=4"),
-#     ([391, 389], "Part-first hier. dim=8"),
-# ]
-
-TITLE = "Embedding loss power ablation"
+TITLE = "Zero-shot segmentation performance"
 RUN_GROUPS = [
-    ([177], "Power=1"),
-    ([179, 271, 273], "Power=3"),
-    ([181, 182], "Power=5"),
+    ([384, 385], "Euclidian. dim=4"),
+    ([386, 387], "Standard hier. dim=4"),
+    ([390, 388], "Part-first hier. dim=4"),
+    ([391, 389], "Part-first hier. dim=8"),
 ]
 
+# TITLE = "Embedding loss power ablation"
+# RUN_GROUPS = [
+#     ([177], "Power=1"),
+#     ([179, 271, 273], "Power=3"),
+#     ([181, 182], "Power=5"),
+# ]
 
-PLOT_TYPE  = "bar"                     # "line" or "bar"
-METRIC     = "val_mIoU_part"            # metric for line plots
-BAR_METRIC = "test_mIoU_subpart"        # metric for bar charts
+# TITLE = "PASCAL VOC 2012 OOD performance"
+# RUN_GROUPS = [
+#     ([427, 428, 434, 435], "Euclidian"),
+#     ([430, 431, 432], "Hyperbolic"),  # 2 for 432
+# ]
+
+# TITLE = "Tau parameter"
+# RUN_GROUPS = [
+#     ([446, 447, 448, 449, 454, 455, 456, 457, 458], "Tau ablation"),
+# ]
+
+# TITLE = "Shared encoder"
+# RUN_GROUPS: Optional[List[tuple]] = [
+#     ([442, 443, 481, 482], "Baseline"),
+#     ([475, 476, 477, 478], "Ours"),
+# ]
+
+# TITLE = "Subpart only"
+# RUN_GROUPS: Optional[List[tuple]] = [
+#     ([484, 483], "Euclidian"),
+#     ([466, 467, 472, 473], "Hyperbolic"),
+# ]
+
+# For hyperparameter plots - set PLOT_TYPE to "hyperparameter" and configure below
+# TITLE = "Effect of Tau on validation mIoU"
+# HYPERPARAMETER_RUNS = [123, 124, 125, 126, 127]  # runs with different tau values
+# HYPERPARAMETER_KEY = "tau"  # config key for the hyperparameter
+# HYPERPARAMETER_METRIC = "val_mIoU_part"  # metric to plot on Y-axis
+
+PLOT_TYPE  = "bar"                     # "line", "bar", or "hyperparameter"
+METRIC     = "test_mIoU_subpart"            # metric for line plots
+BAR_METRIC = "test_mIoU_part"        # metric for bar charts
+HYPERPARAMETER_KEY = "tau"             # hyperparameter config key for hyperparameter plots
+HYPERPARAMETER_METRIC = "test_mIoU_whole"  # metric for hyperparameter plots
+HYPERPARAMETER_RUNS = [461, 464, 465, 466, 467, 468, 469, 470, 471, 472, 473, 474]               # list of run IDs for hyperparameter plots
 STEP_KEY   = "trainer/global_step"      # change if your step key differs
 PROJECT    = "inverse_rl/hyperbolic-segmentation"
 # --------------------------------------------------------------------------- #
@@ -66,9 +97,12 @@ def fetch_history(groups: List[RunGroup]) -> pd.DataFrame:
     api = wandb.Api()
 
     # Collect all run IDs
-    all_ids = set()
-    for group in groups:
-        all_ids.update(group.run_ids)
+    if PLOT_TYPE == "hyperparameter":
+        all_ids = set(HYPERPARAMETER_RUNS)
+    else:
+        all_ids = set()
+        for group in groups:
+            all_ids.update(group.run_ids)
 
     # Build regex for all IDs
     regex_tail = "(" + "|".join(str(i) for i in all_ids) + r")$"
@@ -82,15 +116,16 @@ def fetch_history(groups: List[RunGroup]) -> pd.DataFrame:
 
     # Create mapping of run_id to group_name
     id_to_group = {}
-    for group in groups:
-        for run_id in group.run_ids:
-            id_to_group[run_id] = group.name
+    if PLOT_TYPE != "hyperparameter":
+        for group in groups:
+            for run_id in group.run_ids:
+                id_to_group[run_id] = group.name
 
     # Determine which metrics to fetch
     if PLOT_TYPE == "bar":
-        metrics_to_fetch = [BAR_METRIC]
-        if STEP_KEY not in metrics_to_fetch:
-            metrics_to_fetch.append(STEP_KEY)
+        metrics_to_fetch = [STEP_KEY, BAR_METRIC]
+    elif PLOT_TYPE == "hyperparameter":
+        metrics_to_fetch = [STEP_KEY, HYPERPARAMETER_METRIC]
     else:
         metrics_to_fetch = [STEP_KEY, METRIC]
 
@@ -107,13 +142,24 @@ def fetch_history(groups: List[RunGroup]) -> pd.DataFrame:
         hist["run_number"] = run_id
         hist["run_name"] = run.name
         hist["hyperbolic"] = hyper
-        hist["ratio_loss_weight"] = run.config.get("ratio_loss_weight", 0)
+        
+        # Add hyperparameter value for hyperparameter plots
+        if PLOT_TYPE == "hyperparameter":
+            hyperparameter_value = run.config.get(HYPERPARAMETER_KEY, None)
+            if hyperparameter_value is None:
+                print(f"Warning: Run {run_id} missing hyperparameter '{HYPERPARAMETER_KEY}', skipping...")
+                continue
+            hist[HYPERPARAMETER_KEY] = hyperparameter_value
+        
+        # hist["ratio_loss_weight"] = run.config.get("ratio_loss_weight", 0)
         # if hyper:
         #     effective_dim = int(re.search(r'weights_(\d+)_only', run.config["embeddings_path"]).group(1))
         # else:
         #     effective_dim = run.config["head_dim"]
         # hist["effective_dim"] = effective_dim
-        hist["group"] = id_to_group.get(run_id, "ungrouped")
+        
+        if PLOT_TYPE != "hyperparameter":
+            hist["group"] = id_to_group.get(run_id, "ungrouped")
 
         frames.append(hist)
 
@@ -131,6 +177,8 @@ def plot_history(df: pd.DataFrame, groups: List[RunGroup], out_path: Path | None
 
     if PLOT_TYPE == "bar":
         plot_bar_chart(df, groups)
+    elif PLOT_TYPE == "hyperparameter":
+        plot_hyperparameter_chart(df)
     else:
         plot_line_chart(df, groups)
 
@@ -176,13 +224,16 @@ def plot_bar_chart(df: pd.DataFrame, groups: List[RunGroup]) -> None:
     
     for group in groups:
         group_data = df[df["group"] == group.name]
-        # Get max value for each run, then calculate group statistics
-        run_maxes = group_data.groupby("run_number")[BAR_METRIC].max()
+
+        run_values = group_data.groupby("run_name").agg({
+            BAR_METRIC: 'max'
+        })
         group_stats.append({
-            'mean': run_maxes.mean(),
-            'std': run_maxes.std() if len(run_maxes) > 1 else 0
+            'mean': run_values[BAR_METRIC].mean(),
+            'std': run_values[BAR_METRIC].std() if len(run_values) > 1 else 0
         })
         group_names.append(group.name)
+        print(f"{group.name} - {BAR_METRIC}: mean={group_stats[-1]['mean']:.4f}, std={group_stats[-1]['std']:.4f}")
     
     means = [stat['mean'] for stat in group_stats]
     stds = [stat['std'] for stat in group_stats]
@@ -197,11 +248,47 @@ def plot_bar_chart(df: pd.DataFrame, groups: List[RunGroup]) -> None:
     plt.tight_layout()
 
 
+def plot_hyperparameter_chart(df: pd.DataFrame) -> None:
+    """Plot hyperparameter vs metric chart."""
+    # Get the best (max) metric value for each run
+    run_best_values = df.groupby("run_number").agg({
+        HYPERPARAMETER_METRIC: 'max',
+        HYPERPARAMETER_KEY: 'first'  # hyperparameter value should be constant per run
+    }).reset_index()
+    
+    # Sort by hyperparameter value for a clean line plot
+    run_best_values = run_best_values.sort_values(HYPERPARAMETER_KEY)
+    print(f"{HYPERPARAMETER_KEY} = {run_best_values[HYPERPARAMETER_KEY].tolist()}")
+    print(f"{HYPERPARAMETER_METRIC} = {run_best_values[HYPERPARAMETER_METRIC].tolist()}")
+    
+    # Plot the points and line
+    plt.plot(run_best_values[HYPERPARAMETER_KEY], run_best_values[HYPERPARAMETER_METRIC], 
+             'o-', linewidth=2, markersize=8)
+    
+    # Add value labels on points
+    for _, row in run_best_values.iterrows():
+        plt.annotate(f'{row[HYPERPARAMETER_METRIC]:.3f}', 
+                    (row[HYPERPARAMETER_KEY], row[HYPERPARAMETER_METRIC]),
+                    textcoords="offset points", xytext=(0,10), ha='center', fontsize=9)
+    
+    plt.xlabel(HYPERPARAMETER_KEY)
+    plt.ylabel(f"Best {HYPERPARAMETER_METRIC}")
+    plt.title(TITLE)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+
 def main() -> None:
     groups = get_groups()
     df = fetch_history(groups)
-    run_names = np.array(df['run_number'].unique()).tolist()
-    out_file = Path(f"plots/{TITLE} {run_names}.png")
+
+    if PLOT_TYPE == "hyperparameter":
+        run_names = HYPERPARAMETER_RUNS
+        out_file = Path(f"plots/{TITLE} {run_names}.png")
+    else:
+        run_names = np.array(df['run_number'].unique()).tolist()
+        out_file = Path(f"plots/{TITLE} {run_names}.png")
+    
     plot_history(df, groups, out_file)
 
 

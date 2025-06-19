@@ -253,13 +253,11 @@ class SegformerLightningModule(L.LightningModule):
             np.fill_diagonal(cm, 0)
 
             fig, ax = plt.subplots(figsize=(12, 10), dpi=300)
-            cax = ax.matshow(cm, cmap=plt.cm.Reds)
+            cax = ax.matshow(cm, cmap=plt.cm.Reds, vmin=0.01)  # Set vmin to make 0 values white
             fig.colorbar(cax)
-            ax.set_title(f"Confusion Matrix for {granularity}. Share correct: {share_correct:.2f}")
+            ax.set_title(f"Log-Scale Confusion Matrix for {granularity}. Share correct: {share_correct:.2f}")
             ax.set_xlabel("Predicted")
             ax.set_ylabel("True")
-            ax.set_xticks(np.arange(num_classes))
-            ax.set_yticks(np.arange(num_classes))
 
             plt.savefig(f"confusion_matrix_{granularity}.png")
             plt.clf()
