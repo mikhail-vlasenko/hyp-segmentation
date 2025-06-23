@@ -15,16 +15,17 @@ from hierarchy_embeddings.losses import distortion_loss
 # Set style for better plots
 plt.style.use('default')
 sns.set_palette("RdBu_r")
-Y_MIN = 0.6
+Y_MIN = 0.5
 X_LIM = 0.15
 POWER = 3.0
-SECTOR_ANGLE = np.pi / 8
+SECTOR_ANGLE = np.pi / 6
 CLIP_MAX = 0.2
 CLIP_MIN = 0.1
 side_height = 0.82
 top_offset = 0.07
 middle_height = 0.75
 middle_offset = 0.05
+GRID_SIZE = 100
 
 
 MOVABLE_POS = [top_offset, side_height]
@@ -36,7 +37,7 @@ def setup_static_embeddings() -> Tuple[torch.Tensor, List[str]]:
     embeddings = torch.tensor([
         [-middle_offset, middle_height],  # center bottom (CB)
         [middle_offset, middle_height],   # right bottom (RB)
-        [0.02, 0.825],   # center top (CT)
+        [0.02, 0.83],   # center top (CT)
         [-top_offset, side_height],  # left top (LT)
         [0.0, 0.5],   # root R at center
     ], dtype=torch.float32)
@@ -157,39 +158,24 @@ def is_in_poincare_disk(x: float, y: float, margin: float = 0.01) -> bool:
     return (x**2 + y**2) < (1.0 - margin)**2
 
 
-def generate_loss_map(grid_size: int = 50, sector_angle: float = np.pi / 2):
-    """Generate the loss map by sampling positions in a sector of the hyperbolic disk."""
+def compute_loss_map_core(coords_x: np.ndarray, coords_y: np.ndarray) -> Tuple[np.ndarray, torch.Tensor, List[str], torch.Tensor, PoincareBall]:
+    """Core function to compute loss map given coordinate arrays."""
     static_embeddings, labels = setup_static_embeddings()
 
     # Construct graph and get distance matrix
     G, _ = construct_graph()
     distance_matrix = get_distance_matrix_from_graph(G)
-    print("Distance matrix:")
-    print(distance_matrix)
 
     # Initialize the hyperbolic manifold
     manifold = PoincareBall(c=Curvature(value=1.0))
 
-    movable_pos = torch.tensor(MOVABLE_POS, dtype=torch.float32)
-    compute_loss_for_position(movable_pos, static_embeddings, distance_matrix, manifold, verbose=True)
+    # Initialize loss map
+    loss_map = np.full(coords_x.shape, np.nan)
 
-    # Generate coordinates in a sector of the disk
-    # Use polar coordinates and convert to Cartesian
-    max_radius = 0.87  # Very close to unit disk boundary
-    # Add extra points for better coverage at boundaries
-    angles = np.linspace(-sector_angle/2 + np.pi / 2, sector_angle/2 + np.pi / 2, grid_size)
-    radii = np.linspace(Y_MIN, max_radius, grid_size)
+    print(f"Computing loss map for {coords_x.shape[0]}x{coords_x.shape[1]} grid...")
     
-    # Create coordinate meshgrids
-    angle_grid, radius_grid = np.meshgrid(angles, radii, indexing='ij')
-    coords_x = radius_grid * np.cos(angle_grid)
-    coords_y = radius_grid * np.sin(angle_grid)
-    
-    loss_map = np.full((grid_size, grid_size), np.nan)
-
-    print("Computing loss map...")
-    for i, angle in tqdm(enumerate(angles)):
-        for j, radius in enumerate(radii):
+    for i in tqdm(range(coords_x.shape[0])):
+        for j in range(coords_x.shape[1]):
             x = coords_x[i, j]
             y = coords_y[i, j]
             
@@ -202,49 +188,88 @@ def generate_loss_map(grid_size: int = 50, sector_angle: float = np.pi / 2):
             else:
                 print(f"Skipping out-of-disk position: ({x:.3f}, {y:.3f})")
 
+    return loss_map, static_embeddings, labels, distance_matrix, manifold
+
+
+def generate_loss_map(sector_angle: float = np.pi / 2):
+    """Generate the loss map by sampling positions in a sector of the hyperbolic disk."""
+
+    # Generate coordinates in a sector of the disk
+    # Use polar coordinates and convert to Cartesian
+    max_radius = 0.87  # Very close to unit disk boundary
+    # Add extra points for better coverage at boundaries
+    angles = np.linspace(-sector_angle/2 + np.pi / 2, sector_angle/2 + np.pi / 2, GRID_SIZE)
+    radii = np.linspace(Y_MIN, max_radius, GRID_SIZE)
+    
+    # Create coordinate meshgrids
+    angle_grid, radius_grid = np.meshgrid(angles, radii, indexing='ij')
+    coords_x = radius_grid * np.cos(angle_grid)
+    coords_y = radius_grid * np.sin(angle_grid)
+    
+    # Compute loss map using core function
+    loss_map, static_embeddings, labels, distance_matrix, manifold = compute_loss_map_core(coords_x, coords_y)
+
+    return loss_map, coords_x, coords_y, static_embeddings, labels, distance_matrix, manifold
+
+
+def generate_loss_map_region(x_min: float, x_max: float, y_min: float, y_max: float):
+    """Generate a loss map for a specific rectangular region."""
+    print(f"Setting up zoomed loss map for region ({x_min:.2f}-{x_max:.2f}, {y_min:.2f}-{y_max:.2f})...")
+    
+    # Generate coordinates in the specified rectangular region
+    x_coords = np.linspace(x_min, x_max, GRID_SIZE)
+    y_coords = np.linspace(y_min, y_max, GRID_SIZE)
+    
+    # Create coordinate meshgrids
+    coords_x, coords_y = np.meshgrid(x_coords, y_coords, indexing='xy')
+    
+    # Compute loss map using core function
+    loss_map, static_embeddings, labels, distance_matrix, manifold = compute_loss_map_core(coords_x, coords_y)
+
     return loss_map, coords_x, coords_y, static_embeddings, labels, distance_matrix, manifold
 
 
 def plot_loss_map_with_graph():
     """Create and plot the loss map with graph edges in hyperbolic space."""
+    # Generate main loss map
     loss_map, coords_x, coords_y, static_embeddings, labels, distance_matrix, manifold = generate_loss_map(sector_angle=SECTOR_ANGLE)
+    
+    # Generate zoomed loss map for region
+    zoom_x_min, zoom_x_max = 0.0, 0.1
+    zoom_y_min, zoom_y_max = 0.75, 0.85
+    zoom_loss_map, zoom_coords_x, zoom_coords_y, _, _, _, _ = generate_loss_map_region(
+        zoom_x_min, zoom_x_max, zoom_y_min, zoom_y_max
+    )
 
-    # Create the plot
-    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+    # Create the plot with two subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6), dpi=300)
 
+    # ========== MAIN PLOT (LEFT) ==========
     # Plot heatmap using pcolormesh for irregular grids
     if np.isnan(loss_map).any():
         print("Warning: loss map contains NaN values, check computation.")
     # Mask out NaN values
     masked_loss_map = np.ma.masked_invalid(loss_map)
     masked_loss_map = np.clip(masked_loss_map, CLIP_MIN, CLIP_MAX)
-    im = ax.pcolormesh(coords_x, coords_y, masked_loss_map, shading='auto', cmap='RdBu_r', alpha=0.8)
+    im1 = ax1.pcolormesh(coords_x, coords_y, masked_loss_map, shading='auto', cmap='RdBu_r', alpha=0.8)
 
-    # Add colorbar with same height as main plot
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label('Distortion Loss')
+    # Add colorbar for main plot
+    cbar1 = plt.colorbar(im1, ax=ax1)
+    cbar1.set_label('Distortion Loss')
 
     # Draw the unit circle boundary
     circle = plt.Circle((0, 0), 1.0, fill=False, color='black', linewidth=2, linestyle='--', alpha=0.5)
-    ax.add_patch(circle)
+    ax1.add_patch(circle)
 
     # Plot static embeddings with different colors for root
     for i, (pos, label) in enumerate(zip(static_embeddings, labels)):
-        ax.scatter(pos[0], pos[1], c='black', s=75, marker='o',
+        ax1.scatter(pos[0], pos[1], c='black', s=100, marker='o',
                    edgecolors='black', linewidths=2, zorder=5)
-        # ax.annotate(label.replace('_', '\n'), (pos[0], pos[1]),
-        #             xytext=(10, 10), textcoords='offset points',
-        #             fontsize=10, fontweight='bold',
-        #             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 
     # Plot movable embedding at a reasonable position within the sector
     movable_pos = torch.tensor(MOVABLE_POS)  # within the sector
-    ax.scatter(movable_pos[0], movable_pos[1], c='purple', s=150, marker='*',
+    ax1.scatter(movable_pos[0], movable_pos[1], c='purple', s=300, marker='*',
                zorder=5)
-    # ax.annotate('movable\n(sample pos)', (movable_pos[0], movable_pos[1]),
-    #             xytext=(10, 10), textcoords='offset points',
-    #             fontsize=10, fontweight='bold',
-    #             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 
     # Add graph edges - plot all edges including those to/from root
     all_positions = torch.cat([static_embeddings, movable_pos.unsqueeze(0)], dim=0)
@@ -252,29 +277,78 @@ def plot_loss_map_with_graph():
 
     for i, j in edges:
         pos1, pos2 = all_positions[i], all_positions[j]
-        ax.plot([pos1[0], pos2[0]], [pos1[1], pos2[1]],
+        ax1.plot([pos1[0], pos2[0]], [pos1[1], pos2[1]],
                 'k--', alpha=0.6, linewidth=2, zorder=3)
 
         # Add distance labels on edges
         mid_x, mid_y = (pos1[0] + pos2[0]) / 2, (pos1[1] + pos2[1]) / 2
         distance = distance_matrix[i, j].item()
 
-    ax.set_xlabel('X Coordinate (Poincaré Disk)')
-    ax.set_ylabel('Y Coordinate (Poincaré Disk)')
-    ax.set_title('Hyperbolic Distortion Loss Map with Graph Structure')
-    ax.set_aspect('equal')
+    ax1.set_xlabel('X Coordinate (Poincaré Disk)')
+    ax1.set_ylabel('Y Coordinate (Poincaré Disk)')
+    ax1.set_title('Hyperbolic Distortion Loss Map')
+    ax1.set_aspect('equal')
     
     # Set limits to show the unit disk properly
-    ax.set_xlim(-X_LIM, X_LIM)
-    ax.set_ylim(Y_MIN, 0.9)
+    ax1.set_xlim(-X_LIM, X_LIM)
+    ax1.set_ylim(Y_MIN, 0.9)
+
+    # Add zoom region rectangle
+    zoom_rect = plt.Rectangle((zoom_x_min, zoom_y_min), 
+                             zoom_x_max - zoom_x_min, 
+                             zoom_y_max - zoom_y_min,
+                             linewidth=2, edgecolor='white', facecolor='none', zorder=6)
+    ax1.add_patch(zoom_rect)
+
+    # ========== ZOOMED PLOT (RIGHT) ==========
+    # Plot zoomed heatmap
+    if np.isnan(zoom_loss_map).any():
+        print("Warning: zoomed loss map contains NaN values, check computation.")
+    # Mask out NaN values  
+    masked_zoom_loss_map = np.ma.masked_invalid(zoom_loss_map)
+    masked_zoom_loss_map = np.clip(masked_zoom_loss_map, 0.1, 0.15)
+    im2 = ax2.pcolormesh(zoom_coords_x, zoom_coords_y, masked_zoom_loss_map, shading='auto', cmap='RdBu_r', alpha=0.8)
+
+    # Add colorbar for zoomed plot
+    cbar2 = plt.colorbar(im2, ax=ax2)
+    cbar2.set_label('Distortion Loss (Zoomed)')
+
+    # Plot static embeddings that fall within the zoom region
+    for i, (pos, label) in enumerate(zip(static_embeddings, labels)):
+        if zoom_x_min <= pos[0] <= zoom_x_max and zoom_y_min <= pos[1] <= zoom_y_max:
+            ax2.scatter(pos[0], pos[1], c='black', s=100, marker='o',
+                       edgecolors='black', linewidths=2, zorder=5)
+
+    # Plot movable embedding if it's in the zoom region
+    if zoom_x_min <= movable_pos[0] <= zoom_x_max and zoom_y_min <= movable_pos[1] <= zoom_y_max:
+        ax2.scatter(movable_pos[0], movable_pos[1], c='purple', s=300, marker='*',
+                   zorder=5)
+
+    # Add graph edges that pass through the zoom region
+    for i, j in edges:
+        pos1, pos2 = all_positions[i], all_positions[j]
+        # Check if edge passes through or intersects the zoom region
+        if ((zoom_x_min <= pos1[0] <= zoom_x_max and zoom_y_min <= pos1[1] <= zoom_y_max) or
+            (zoom_x_min <= pos2[0] <= zoom_x_max and zoom_y_min <= pos2[1] <= zoom_y_max)):
+            ax2.plot([pos1[0], pos2[0]], [pos1[1], pos2[1]],
+                    'k--', alpha=0.6, linewidth=2, zorder=3)
+
+    ax2.set_xlabel('X Coordinate (Poincaré Disk)')
+    ax2.set_ylabel('Y Coordinate (Poincaré Disk)')
+    ax2.set_title(f'Zoomed View: ({zoom_x_min:.1f}-{zoom_x_max:.1f}, {zoom_y_min:.2f}-{zoom_y_max:.2f})')
+    ax2.set_aspect('equal')
+    
+    # Set limits for zoomed view
+    ax2.set_xlim(zoom_x_min, zoom_x_max)
+    ax2.set_ylim(zoom_y_min, zoom_y_max)
 
     plt.tight_layout()
-    plt.savefig('plots/loss_swap_graph.png', dpi=300)
+    plt.savefig('plots/loss_swap_graph.png', dpi=300, bbox_inches='tight')
 
     # Print some statistics
     valid_losses = loss_map[~np.isnan(loss_map)]
     if len(valid_losses) > 0:
-        print(f"\nLoss Map Statistics:")
+        print(f"\nMain Loss Map Statistics:")
         print(f"Minimum loss: {np.min(valid_losses):.4f}")
         print(f"Maximum loss: {np.max(valid_losses):.4f}")
         print(f"Mean loss: {np.mean(valid_losses):.4f}")
@@ -286,6 +360,22 @@ def plot_loss_map_with_graph():
         print(f"Position of minimum loss: ({min_x:.3f}, {min_y:.3f})")
     else:
         print("No valid loss values computed.")
+
+    # Print zoomed statistics
+    valid_zoom_losses = zoom_loss_map[~np.isnan(zoom_loss_map)]
+    if len(valid_zoom_losses) > 0:
+        print(f"\nZoomed Loss Map Statistics:")
+        print(f"Minimum loss: {np.min(valid_zoom_losses):.4f}")
+        print(f"Maximum loss: {np.max(valid_zoom_losses):.4f}")
+        print(f"Mean loss: {np.mean(valid_zoom_losses):.4f}")
+
+        # Find position of minimum loss in zoomed region
+        zoom_min_idx = np.unravel_index(np.nanargmin(zoom_loss_map), zoom_loss_map.shape)
+        zoom_min_x = zoom_coords_x[zoom_min_idx]
+        zoom_min_y = zoom_coords_y[zoom_min_idx]
+        print(f"Position of minimum loss in zoomed region: ({zoom_min_x:.3f}, {zoom_min_y:.3f})")
+    else:
+        print("No valid loss values computed in zoomed region.")
 
 
 if __name__ == "__main__":
