@@ -14,25 +14,29 @@ import matplotlib.pyplot as plt
 # TARGET_IDS = {204, 205, 208, 209}  # dim 16
 # TARGET_IDS = {210, 211, 212, 213}  # dim 4
 
-TITLE = "Zero-shot segmentation performance"
-RUN_GROUPS = [
-    ([384, 385], "Euclidian. dim=4"),
-    ([386, 387], "Standard hier. dim=4"),
-    ([390, 388], "Part-first hier. dim=4"),
-    ([391, 389], "Part-first hier. dim=8"),
-]
-
-# TITLE = "Embedding loss power ablation"
+# TITLE = "Zero-shot segmentation performance"
 # RUN_GROUPS = [
-#     ([177], "Power=1"),
-#     ([179, 271, 273], "Power=3"),
-#     ([181, 182], "Power=5"),
+#     ([384, 385], "Euclidian. dim=4"),
+#     ([386, 387], "Standard hier. dim=4"),
+#     ([390, 388], "Part-first hier. dim=4"),
+#     ([391, 389], "Part-first hier. dim=8"),
 # ]
+
+TITLE = "Embedding loss power ablation"
+RUN_GROUPS = [
+    ([143, 177], "Power=1, random, dim 64"),
+    ([179, 271, 273], "Power=3, random, dim 64"),
+    ([181, 182], "Power=5, random, dim 64"),
+    ([495, 496], "Power=3, random, dim 8"),  # 253, 254 apparently crashed
+    ([466, 467, 472, 473], "Power=3, tree-aware, dim 8"),
+    ([487, 488], "Power=1, tree-aware, dim 64"),
+    ([486, 485], "Power=3, tree-aware, dim 64"),
+]
 
 # TITLE = "PASCAL VOC 2012 OOD performance"
 # RUN_GROUPS = [
 #     ([427, 428, 434, 435], "Euclidian"),
-#     ([430, 431, 432], "Hyperbolic"),  # 2 for 432
+#     ([430, 431, 432], "Hyperbolic"),  # 2 runs for 432
 # ]
 
 # TITLE = "Tau parameter"
@@ -60,7 +64,7 @@ RUN_GROUPS = [
 
 PLOT_TYPE  = "bar"                     # "line", "bar", or "hyperparameter"
 METRIC     = "test_mIoU_subpart"            # metric for line plots
-BAR_METRIC = "test_mIoU_part"        # metric for bar charts
+BAR_METRIC = "test_mIoU_subpart"        # metric for bar charts
 HYPERPARAMETER_KEY = "tau"             # hyperparameter config key for hyperparameter plots
 HYPERPARAMETER_METRIC = "test_mIoU_whole"  # metric for hyperparameter plots
 HYPERPARAMETER_RUNS = [461, 464, 465, 466, 467, 468, 469, 470, 471, 472, 473, 474]               # list of run IDs for hyperparameter plots
