@@ -260,6 +260,7 @@ class SegformerLightningModule(L.LightningModule):
             ax.set_title(f"Log-Scale Confusion Matrix for {granularity}. Share correct: {share_correct:.2f}")
             ax.set_xlabel("Predicted")
             ax.set_ylabel("True")
+            plt.tight_layout()
 
             plt.savefig(f"confusion_matrix_{granularity}.png")
             plt.clf()
