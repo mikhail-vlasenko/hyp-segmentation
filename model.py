@@ -239,6 +239,7 @@ class SegformerLightningModule(L.LightningModule):
         self.on_eval_epoch_end("test")
         import matplotlib.pyplot as plt
         from sklearn.metrics import confusion_matrix
+        import numpy.ma as ma
 
         for granularity in self.granularities:
             # Aggregate predictions and targets across batches.
@@ -251,9 +252,10 @@ class SegformerLightningModule(L.LightningModule):
             cm = np.log1p(cm)  # Apply log1p to avoid log(0)
             # set diagonal to 0
             np.fill_diagonal(cm, 0)
+            cm_masked = ma.masked_where(cm == 0, cm)
 
             fig, ax = plt.subplots(figsize=(12, 10), dpi=300)
-            cax = ax.matshow(cm, cmap=plt.cm.Reds, vmin=0.01)  # Set vmin to make 0 values white
+            cax = ax.matshow(cm_masked, cmap=plt.cm.Reds, vmin=0.0)
             fig.colorbar(cax)
             ax.set_title(f"Log-Scale Confusion Matrix for {granularity}. Share correct: {share_correct:.2f}")
             ax.set_xlabel("Predicted")
