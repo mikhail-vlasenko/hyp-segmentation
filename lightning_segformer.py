@@ -112,6 +112,7 @@ def main():
             accelerator="auto",
             devices="auto",
         )
+        spin_dm.setup()
         test_dataloaders = [spin_dm.test_dataloader()]
         if pascal_voc_dm:
             test_dataloaders.append(pascal_voc_dm.test_dataloader())
