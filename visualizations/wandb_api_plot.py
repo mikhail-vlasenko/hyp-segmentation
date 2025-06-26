@@ -16,10 +16,17 @@ import matplotlib.pyplot as plt
 
 # TITLE = "Zero-shot segmentation performance"
 # RUN_GROUPS = [
-#     ([384, 385], "Euclidian. dim=4"),
-#     ([386, 387], "Standard hier. dim=4"),
-#     ([390, 388], "Part-first hier. dim=4"),
-#     ([391, 389], "Part-first hier. dim=8"),
+#     ([393, 394], "Quadruped. Euclidian. dim=4"),
+#     ([395, 396], "Quadruped. Euclidian. dim=16"),
+#     ([386, 387], "Quadruped. Standard hier. dim=4"),
+#     ([390, 388], "Quadruped. Part-first hier. dim=4"),
+#     ([391, 389], "Quadruped. Part-first hier. dim=8"),
+#
+#     ([504, 503], "Bird. Euclidian. dim=4"),
+#     ([505, 506], "Bird. Euclidian. dim=16"),
+#     ([499, 500], "Bird. Standard hier. dim=4"),
+#     ([501, 502], "Bird. Part-first hier. dim=4"),
+#     ([507, 508], "Bird. Part-first hier. dim=8"),
 # ]
 
 TITLE = "Embedding loss power ablation"
@@ -27,11 +34,22 @@ RUN_GROUPS = [
     ([143, 177], "Power=1, random, dim 64"),
     ([179, 271, 273], "Power=3, random, dim 64"),
     ([181, 182], "Power=5, random, dim 64"),
-    ([495, 496], "Power=3, random, dim 8"),  # 253, 254 apparently crashed
+    ([495, 496], "Power=3, random, dim 8"),
+    ([212, 213], "Power=3, random, dim 4"),
     ([466, 467, 472, 473], "Power=3, tree-aware, dim 8"),
     ([487, 488], "Power=1, tree-aware, dim 64"),
     ([486, 485], "Power=3, tree-aware, dim 64"),
 ]
+
+# TITLE = "Part-first vs standard hierarchy"
+# RUN_GROUPS = [
+#     ([160, 174], "Baseline, dim=64"),
+#     ([272, 274], "Standard hierarchy, dim=64"),
+#     ([292, 293], "Part-first hierarchy, dim=64"),
+#     ([342], "Baseline, dim=4"),
+#     ([313, 314], "Standard hierarchy, dim=4"),
+#     ([311, 312], "Part-first hierarchy, dim=4"),
+# ]
 
 # TITLE = "PASCAL VOC 2012 OOD performance"
 # RUN_GROUPS = [
@@ -237,7 +255,7 @@ def plot_bar_chart(df: pd.DataFrame, groups: List[RunGroup]) -> None:
             'std': run_values[BAR_METRIC].std() if len(run_values) > 1 else 0
         })
         group_names.append(group.name)
-        print(f"{group.name} - {BAR_METRIC}: mean={group_stats[-1]['mean']:.4f}, std={group_stats[-1]['std']:.4f}")
+        print(f"{group.name} - {BAR_METRIC}: ${group_stats[-1]['mean']:.4f} \pm {group_stats[-1]['std']:.4f}$")
     
     means = [stat['mean'] for stat in group_stats]
     stds = [stat['std'] for stat in group_stats]
