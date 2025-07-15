@@ -161,6 +161,8 @@ class PascalPartDataset(Dataset):
             split: str,
             processor,
             crop_size: Optional[Tuple[float, float]] = None,
+            include_class: Optional[int] = None,
+            exclude_class: Optional[int] = None,
     ):
         """
         Args:
@@ -205,6 +207,20 @@ class PascalPartDataset(Dataset):
         else:
             self.transform = None
 
+        assert not (include_class is not None and exclude_class is not None), \
+            "Only one of include_class or exclude_class can be non-empty, not both"
+
+        if include_class:
+            self.image_ids = [
+                img_id for img_id in self.image_ids
+                if self.image_has_class(img_id, include_class)
+            ]
+        elif exclude_class:
+            self.image_ids = [
+                img_id for img_id in self.image_ids
+                if not self.image_has_class(img_id, exclude_class)
+            ]
+
         self.save_first_samples(output_dir="samples")
 
     def save_first_samples(self, output_dir: str | Path):
@@ -247,11 +263,19 @@ class PascalPartDataset(Dataset):
     def _init_part_mapping(self):
         """Initialize the part index mapping from MATLAB code"""
         # The mapping is already defined in the class variable
+        # Calculate offset for each class based on previous classes' part counts
+        self.class_part_offsets = {}
+        offset = 0
+        
+        for class_id in sorted(self.PART_INDEX_MAP.keys()):
+            self.class_part_offsets[class_id] = offset
+            # Find max part ID for this class
+            if self.PART_INDEX_MAP[class_id]:
+                max_part_id = max(self.PART_INDEX_MAP[class_id].values())
+                offset += max_part_id
+        
         # Calculate total number of unique part classes
-        all_parts = set()
-        for class_parts in self.PART_INDEX_MAP.values():
-            all_parts.update(class_parts.values())
-        self.num_part_classes = len(all_parts) + 1  # +1 for background
+        self.num_part_classes = offset + 1  # +1 for background
 
     def _filter_images_with_parts(self) -> List[str]:
         """Filter image IDs to only include those with part annotations"""
@@ -299,15 +323,24 @@ class PascalPartDataset(Dataset):
                         part_name = str(part['part_name'][0])
                         part_mask_data = part['mask'].astype(bool)
 
-                        # Get part index from mapping
-                        if part_name in self.PART_INDEX_MAP[class_ind]:
-                            part_id = self.PART_INDEX_MAP[class_ind][part_name]
-                            part_mask[part_mask_data] = part_id
-                        else:
-                            raise ValueError(f"Part {part_name} not found in PART_INDEX_MAP for class {class_ind}")
-
+                        part_id = self.PART_INDEX_MAP[class_ind][part_name]
+                        # Apply class offset to make part IDs globally unique
+                        global_part_id = part_id + self.class_part_offsets[class_ind]
+                        part_mask[part_mask_data] = global_part_id
 
         return cls_mask, inst_mask, part_mask
+
+    def image_has_class(self, image_id: str, class_id: int) -> bool:
+        part_file = self.voc_root / "Annotations_Part" / f"{image_id}.mat"
+        anno = loadmat(str(part_file))
+        annotation_data = anno['anno'][0, 0]
+        objects = annotation_data['objects']
+        for obj_idx in range(objects.shape[1]):
+            obj = objects[0, obj_idx]
+            class_ind = int(obj['class_ind'][0, 0])
+            if class_ind == class_id:
+                return True
+        return False
 
     def __len__(self):
         return len(self.image_ids)
@@ -383,6 +416,7 @@ class PascalPartDataModule(L.LightningDataModule):
             batch_size: int = 8,
             crop_size: Tuple[float, float] = (0.8, 0.8),
             num_workers: int = 4,
+            zeroshot_class: Optional[str] = None
     ):
         """
         Args:
@@ -398,6 +432,7 @@ class PascalPartDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.crop_size = crop_size
         self.num_workers = num_workers
+        self.zeroshot_class = zeroshot_class
 
     def setup(self, stage=None):
         """Set up train/val/test datasets."""
@@ -407,12 +442,14 @@ class PascalPartDataModule(L.LightningDataModule):
                 split="train",
                 processor=self.processor,
                 crop_size=self.crop_size,
+                exclude_class=self.zeroshot_class
             )
 
         self.val_dataset = PascalPartDataset(
             voc_root=self.voc_root,
             split="val",
             processor=self.processor,
+            include_class=self.zeroshot_class
         )
 
         # Pascal VOC doesn't have a separate test set, use val for testing

@@ -69,7 +69,7 @@ class SegformerLightningModule(L.LightningModule):
             )
             for g in self.prediction_granularities
         })
-        self.hierarchical_metrics = self.configure_hierarchical_metrics()
+        # self.hierarchical_metrics = self.configure_hierarchical_metrics()
 
         # Prepare containers for test predictions and targets.
         self.test_preds = {g: [] for g in self.prediction_granularities}
@@ -148,7 +148,7 @@ class SegformerLightningModule(L.LightningModule):
                 these_labels = batch[f"labels_{computed_granularity}"]
                 these_preds = preds[computed_granularity]
                 self.jaccards[computed_granularity].update(these_preds, these_labels)
-                self.hierarchical_metrics[computed_granularity].update(these_preds, these_labels)
+                # self.hierarchical_metrics[computed_granularity].update(these_preds, these_labels)
                 if save_preds:
                     self.test_preds[computed_granularity].append(these_preds.detach().cpu())
                     self.test_targets[computed_granularity].append(these_labels.detach().cpu())
@@ -292,11 +292,11 @@ class SegformerLightningModule(L.LightningModule):
     def on_eval_epoch_end(self, prefix="val"):
         for granularity in self.prediction_granularities:
             metric = self.jaccards[granularity]
-            hierarchical_metric = self.hierarchical_metrics[granularity]
+            # hierarchical_metric = self.hierarchical_metrics[granularity]
             self.log(f"{prefix}_mIoU_{granularity}", metric.compute(), prog_bar=True)
-            self.log(f"{prefix}_hierarchical_mIoU_{granularity}", hierarchical_metric.compute(), prog_bar=True)
+            # self.log(f"{prefix}_hierarchical_mIoU_{granularity}", hierarchical_metric.compute(), prog_bar=True)
             metric.reset()
-            hierarchical_metric.reset()
+            # hierarchical_metric.reset()
 
     def on_validation_epoch_end(self):
         self.on_eval_epoch_end("val")

@@ -7,6 +7,7 @@ from lightning.pytorch.loggers import WandbLogger
 from transformers import SegformerImageProcessor
 
 from dataset import SPINDataModule
+from pascal_part import PascalPartDataModule
 from pascal_voc_dataset import PascalVOCDataModule
 from pascal_voc_callback import PascalVOCValidationCallback
 from hierarchy_embeddings.utils import load_hierarchy
@@ -57,15 +58,15 @@ def parse_args():
 
     parser.add_argument("--crop_size", type=float, nargs=2, default=(0.8, 0.8), help="Crop size as a fraction of image dimensions")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--num_workers", type=int, default=4, help="Number of workers for data loading")
+    parser.add_argument("--num_workers", type=int, default=1, help="Number of workers for data loading")
     parser.add_argument("--model_file", type=str, default=None, help="Path to the model file to load")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    # args.model_file = "hyperbolic-segmentation/nifqp5yg/checkpoints/epoch=49-step=24400.ckpt"
-    # args.batch_size = 8
+    pascal_part = True
+    # args.model_file = "hyperbolic-segmentation/7aluucvb/checkpoints/epoch=49-step=27600.ckpt"
     # args.zeroshot_class = "Quadruped"
     DoRemapObjects.value = args.remap_objects
     dataset_annotation_dir = os.path.join(args.dataset_dir, "annotations")
@@ -81,21 +82,31 @@ def main():
     processor = SegformerImageProcessor.from_pretrained(args.model_name)
     processor.do_reduce_labels = False
 
-    spin_dm = SPINDataModule(
-        annotation_dir=dataset_annotation_dir,
-        image_dir=dataset_image_dir,
-        granularities=granularities,
-        processor=processor,
-        batch_size=args.batch_size,
-        crop_size=args.crop_size,
-        num_workers=args.num_workers,
-        remap_objects=args.remap_objects,
-        zeroshot_class=args.zeroshot_class,
-    )
+    if pascal_part:
+        spin_dm = PascalPartDataModule(
+            voc_root=args.pascal_voc_root,
+            processor=processor,
+            batch_size=args.batch_size,
+            crop_size=args.crop_size,
+            num_workers=args.num_workers,
+            zeroshot_class=args.zeroshot_class,
+        )
+    else:
+        spin_dm = SPINDataModule(
+            annotation_dir=dataset_annotation_dir,
+            image_dir=dataset_image_dir,
+            granularities=granularities,
+            processor=processor,
+            batch_size=args.batch_size,
+            crop_size=args.crop_size,
+            num_workers=args.num_workers,
+            remap_objects=args.remap_objects,
+            zeroshot_class=args.zeroshot_class,
+        )
 
     # Create Pascal VOC datamodule if path is provided
     pascal_voc_dm = None
-    if args.pascal_voc_root:
+    if args.pascal_voc_root and not pascal_part:
         print(f"Adding Pascal VOC validation from: {args.pascal_voc_root}")
         pascal_voc_dm = PascalVOCDataModule(
             voc_root=args.pascal_voc_root,
