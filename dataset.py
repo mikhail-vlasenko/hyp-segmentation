@@ -16,37 +16,7 @@ from transformers import SegformerImageProcessor
 
 from hierarchy_embeddings.object_supercategory_mapping import OBJECT_SUPERCATEGORY_MAPPING
 from hierarchy_embeddings.utils import load_hierarchy
-from utils import background_class_for_granularity
-
-
-class RandomCropAndFlip:
-    """
-    A custom transform that applies a random crop and random horizontal flip
-    to both an image and its segmentation map.
-    """
-
-    def __init__(self, crop_size):
-        self.crop_size = crop_size
-
-    def __call__(self, image, segmentation_maps):
-        """
-        Takes multiple segmentation maps as input. Transforms them all in the same way.
-        """
-        # image.size => (width, height)
-        w, h = image.size
-        crop_w, crop_h = int(self.crop_size[0] * w), int(self.crop_size[1] * h)
-
-        # Random crop
-        i, j, h_, w_ = transforms.RandomCrop.get_params(image, (crop_h, crop_w))
-        image = TF.crop(image, i, j, h_, w_)
-        segmentation_maps = [TF.crop(s, i, j, h_, w_) for s in segmentation_maps]
-
-        # Random horizontal flip
-        if np.random.random() > 0.5:
-            image = TF.hflip(image)
-            segmentation_maps = [TF.hflip(s) for s in segmentation_maps]
-
-        return image, segmentation_maps
+from utils import background_class_for_granularity, RandomCropAndFlip
 
 
 class SPINSegmentationDataset(Dataset):
@@ -122,6 +92,7 @@ class SPINSegmentationDataset(Dataset):
         return Image.fromarray(segmentation_map.astype("uint8"))
 
     def __getitem__(self, idx):
+        print(f"Loading item {idx} from test dataset")
         image_id = self.image_ids[idx]
         image = self.spin_api.get_image(image_id)
 

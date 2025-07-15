@@ -56,17 +56,17 @@ def plot_distortion_difference(diff_mat, node_permutation, output_path):
     )
 
     fig = plt.figure(figsize=(12, 10), dpi=300)
-    sn.set(font_scale=0.5)
-    
+
     # Use a diverging colormap to show positive and negative differences
-    sn.heatmap(df_cm, cmap='RdBu_r', center=0)
+    sn.heatmap(df_cm, cmap='RdBu_r', shading='auto', center=0)
+
+    plt.title('Difference in Distortions (Loss Power 3 - Standard)')
+    plt.xlabel('Node Index')
+    plt.ylabel('Node Index')
+
     plt.tight_layout()
     
-    plt.title('Difference in Distortions (Loss Power 3 - Standard)', fontsize=16)
-    plt.xlabel('Node Index', fontsize=12)
-    plt.ylabel('Node Index', fontsize=12)
-    
-    fig.savefig(output_path, bbox_inches='tight')
+    fig.savefig(output_path)
     plt.clf()
     print(f"Distortion difference plot saved to: {output_path}")
 

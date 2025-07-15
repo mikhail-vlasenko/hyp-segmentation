@@ -39,7 +39,7 @@ def get_dataset() -> SPINSegmentationDataset:
     return SPINSegmentationDataset(
         annotation_dir=annotation_dir,
         image_dir=image_dir,
-        split="train",
+        split="test",
         granularities=granularities,
         processor=processor,
         remap_objects=True,
@@ -62,7 +62,7 @@ def _stable_color_for_label(label: int) -> tuple[int, int, int]:
     return tuple(rng.randrange(32, 224) for _ in range(3))  # avoid extremes
 
 
-def _colorise_mask(mask: Image.Image, granularity) -> Image.Image:
+def colorise_mask(mask: Image.Image, granularity) -> Image.Image:
     """Convert a single‑channel segmentation mask to an RGB image."""
     arr = np.array(mask, dtype=np.int64)
     h, w = arr.shape
@@ -76,7 +76,7 @@ def _colorise_mask(mask: Image.Image, granularity) -> Image.Image:
     return Image.fromarray(colour)
 
 
-def _blend(img: Image.Image, mask_rgb: Image.Image, alpha: float = 0.5) -> Image.Image:
+def blend(img: Image.Image, mask_rgb: Image.Image, alpha: float = 0.5) -> Image.Image:
     """Alpha‑blend a colour mask on top of the RGB image."""
     if mask_rgb.mode != "RGBA":
         # convert and make background transparent
@@ -156,8 +156,8 @@ async def get_overlay(
     if granularity == "whole":
         DoRemapObjects.value = True
 
-    mask_rgb = _colorise_mask(mask, granularity)
-    blended = _blend(img, mask_rgb, alpha=alpha)
+    mask_rgb = colorise_mask(mask, granularity)
+    blended = blend(img, mask_rgb, alpha=alpha)
 
     buf = io.BytesIO()
     mask_rgb.save(buf, format="JPEG", quality=90)
