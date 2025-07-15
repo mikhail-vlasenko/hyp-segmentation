@@ -67,6 +67,7 @@ class PascalPartDataset(Dataset):
 
     # Part index mapping (converted from MATLAB code)
     # Merged indexed parts (engine_1, engine_2, etc.) and left/right parts (lwing/rwing, etc.)
+    # Also merged front/back and upper/lower variants where logically similar
     PART_INDEX_MAP = {
         1: {  # aeroplane
             'body': 1, 'stern': 2, 'wing': 3, 'tail': 4, 'engine': 5, 'wheel': 6,
@@ -99,16 +100,21 @@ class PascalPartDataset(Dataset):
         },
         7: {},  # car - same as bus, will be copied
         8: {  # cat
-            'head': 1, 'eye': 2, 'ear': 3, 'nose': 4, 'torso': 5, 'neck': 6, 'fleg': 7, 'fpa': 8, 'bleg': 9, 'bpa': 10, 'tail': 11,
-            # Merge leye/reye -> eye, lear/rear -> ear, lfleg/rfleg -> fleg, lfpa/rfpa -> fpa, lbleg/rbleg -> bleg, lbpa/rbpa -> bpa
-            'leye': 2, 'reye': 2, 'lear': 3, 'rear': 3, 'lfleg': 7, 'rfleg': 7, 'lfpa': 8, 'rfpa': 8, 'lbleg': 9, 'rbleg': 9, 'lbpa': 10, 'rbpa': 10
+            'head': 1, 'eye': 2, 'ear': 3, 'nose': 4, 'torso': 5, 'neck': 6, 'leg': 7, 'paw': 8, 'tail': 9,
+            # Merge leye/reye -> eye, lear/rear -> ear
+            'leye': 2, 'reye': 2, 'lear': 3, 'rear': 3,
+            # Merge front/back legs -> leg, front/back paws -> paw
+            'fleg': 7, 'bleg': 7, 'lfleg': 7, 'rfleg': 7, 'lbleg': 7, 'rbleg': 7,
+            'fpa': 8, 'bpa': 8, 'lfpa': 8, 'rfpa': 8, 'lbpa': 8, 'rbpa': 8
         },
         9: {},  # chair - only silhouette mask
         10: {  # cow
-            'head': 1, 'eye': 2, 'ear': 3, 'muzzle': 4, 'horn': 5, 'torso': 6, 'neck': 7, 'fuleg': 8, 'flleg': 9, 'buleg': 10, 'blleg': 11, 'tail': 12,
-            # Merge leye/reye -> eye, lear/rear -> ear, lhorn/rhorn -> horn, front/back legs
+            'head': 1, 'eye': 2, 'ear': 3, 'muzzle': 4, 'horn': 5, 'torso': 6, 'neck': 7, 'uleg': 8, 'lleg': 9, 'tail': 10,
+            # Merge leye/reye -> eye, lear/rear -> ear, lhorn/rhorn -> horn
             'leye': 2, 'reye': 2, 'lear': 3, 'rear': 3, 'lhorn': 5, 'rhorn': 5,
-            'lfuleg': 8, 'rfuleg': 8, 'lflleg': 9, 'rflleg': 9, 'lbuleg': 10, 'rbuleg': 10, 'lblleg': 11, 'rblleg': 11
+            # Merge front/back upper legs -> uleg, front/back lower legs -> lleg
+            'fuleg': 8, 'buleg': 8, 'lfuleg': 8, 'rfuleg': 8, 'lbuleg': 8, 'rbuleg': 8,
+            'flleg': 9, 'blleg': 9, 'lflleg': 9, 'rflleg': 9, 'lblleg': 9, 'rblleg': 9
         },
         11: {},  # diningtable - only silhouette mask
         12: {},  # dog - same as cat + muzzle, will be copied
@@ -120,11 +126,14 @@ class PascalPartDataset(Dataset):
         },
         15: {  # person
             'head': 1, 'eye': 2, 'ear': 3, 'eyebrow': 4, 'nose': 5, 'mouth': 6, 'hair': 7, 'torso': 8, 'neck': 9,
-            'arm': 10, 'uarm': 11, 'hand': 12, 'leg': 13, 'uleg': 14, 'foot': 15,
+            'arm': 10, 'hand': 11, 'leg': 12, 'foot': 13,
             # Merge left/right body parts
             'leye': 2, 'reye': 2, 'lear': 3, 'rear': 3, 'lebrow': 4, 'rebrow': 4,
-            'larm': 10, 'rlarm': 10, 'llarm': 10, 'luarm': 11, 'ruarm': 11, 'lhand': 12, 'rhand': 12,
-            'lleg': 13, 'rlleg': 13, 'llleg': 13, 'luleg': 14, 'ruleg': 14, 'lfoot': 15, 'rfoot': 15
+            # Merge arm variants -> arm, leg variants -> leg
+            'larm': 10, 'rlarm': 10, 'llarm': 10, 'uarm': 10, 'luarm': 10, 'ruarm': 10,
+            'lhand': 11, 'rhand': 11,
+            'lleg': 12, 'rlleg': 12, 'llleg': 12, 'uleg': 12, 'luleg': 12, 'ruleg': 12,
+            'lfoot': 13, 'rfoot': 13
         },
         16: {'pot': 1, 'plant': 2},  # pottedplant
         17: {},  # sheep - same as cow, will be copied
@@ -152,7 +161,6 @@ class PascalPartDataset(Dataset):
             split: str,
             processor,
             crop_size: Optional[Tuple[float, float]] = None,
-            max_parts: int = 100,  # Maximum number of parts across all classes
     ):
         """
         Args:
@@ -160,23 +168,21 @@ class PascalPartDataset(Dataset):
             split: Dataset split ('train', 'val', 'trainval')
             processor: SegformerImageProcessor for preprocessing
             crop_size: Tuple of (height_ratio, width_ratio) for random cropping during training
-            max_parts: Maximum number of part classes to support
         """
         super().__init__()
         self.voc_root = Path(voc_root)
         self.split = split
         self.processor = processor
-        self.max_parts = max_parts
 
         # Copy shared part mappings
         self.PART_INDEX_MAP[7] = self.PART_INDEX_MAP[6].copy()  # car same as bus
         self.PART_INDEX_MAP[12] = self.PART_INDEX_MAP[8].copy()  # dog same as cat
-        self.PART_INDEX_MAP[12]['muzzle'] = 12  # dog has additional muzzle
+        self.PART_INDEX_MAP[12]['muzzle'] = 10  # dog has additional muzzle (after tail=9)
         self.PART_INDEX_MAP[13] = self.PART_INDEX_MAP[10].copy()  # horse same as cow
         # Remove horns and add hooves for horse
         self.PART_INDEX_MAP[13] = {k: v for k, v in self.PART_INDEX_MAP[13].items()
                                    if k not in ['horn', 'lhorn', 'rhorn']}
-        self.PART_INDEX_MAP[13].update({'hoof': 13, 'lfho': 13, 'rfho': 13, 'lbho': 13, 'rbho': 13})
+        self.PART_INDEX_MAP[13].update({'hoof': 11, 'lfho': 11, 'rfho': 11, 'lbho': 11, 'rbho': 11})  # hoof after lleg=9, tail=10
         self.PART_INDEX_MAP[17] = self.PART_INDEX_MAP[10].copy()  # sheep same as cow
 
         # Initialize part index mapping
@@ -198,6 +204,45 @@ class PascalPartDataset(Dataset):
             self.transform = RandomCropAndFlip(crop_size=crop_size)
         else:
             self.transform = None
+
+        self.save_first_samples(output_dir="samples")
+
+    def save_first_samples(self, output_dir: str | Path):
+        """Save first 2 samples with their segmentation masks for visualization."""
+        import matplotlib.pyplot as plt
+        from PIL import Image
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(exist_ok=True, parents=True)
+        
+        for i in range(5):
+            sample = self[i]
+            
+            # Get original image
+            img_path = self.voc_root / "JPEGImages" / f"{self.image_ids[i]}.jpg"
+            img = Image.open(img_path).convert('RGB')
+            
+            # Create figure with 3 subplots
+            fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
+            
+            # Plot original image
+            ax1.imshow(img)
+            ax1.set_title('Original Image')
+            ax1.axis('off')
+            
+            # Plot class segmentation mask
+            ax2.imshow(sample['labels_whole'].squeeze())
+            ax2.set_title('Class Segmentation')
+            ax2.axis('off')
+            
+            # Plot part segmentation mask
+            ax3.imshow(sample['labels_part'].squeeze())
+            ax3.set_title('Part Segmentation')
+            ax3.axis('off')
+            
+            plt.tight_layout()
+            plt.savefig(output_dir / f"sample_{i}.png")
+            plt.close()
 
     def _init_part_mapping(self):
         """Initialize the part index mapping from MATLAB code"""
@@ -236,7 +281,7 @@ class PascalPartDataset(Dataset):
         for obj_idx in range(objects.shape[1]):
             obj = objects[0, obj_idx]
             class_ind = int(obj['class_ind'][0, 0])
-            silh = obj['mask'][0, 0].astype(bool)
+            silh = obj['mask'].astype(bool)
 
             # Ensure mask dimensions match image
             if silh.shape != (height, width):
@@ -247,22 +292,20 @@ class PascalPartDataset(Dataset):
 
             # Process parts
             if 'parts' in obj.dtype.names and obj['parts'].size > 0:
-                parts = obj['parts'][0, 0]
+                parts = obj['parts'][0]
                 if parts.size > 0:
-                    for part_idx in range(parts.shape[1]):
-                        part = parts[0, part_idx]
+                    for part_idx in range(len(parts)):
+                        part = parts[part_idx]
                         part_name = str(part['part_name'][0])
-                        part_mask_data = part['mask'][0, 0].astype(bool)
+                        part_mask_data = part['mask'].astype(bool)
 
                         # Get part index from mapping
-                        if class_ind in self.PART_INDEX_MAP:
-                            if part_name in self.PART_INDEX_MAP[class_ind]:
-                                part_id = self.PART_INDEX_MAP[class_ind][part_name]
-                                part_mask[part_mask_data] = part_id
-                            else:
-                                raise ValueError(f"Part {part_name} not found in PART_INDEX_MAP for class {class_ind}")
+                        if part_name in self.PART_INDEX_MAP[class_ind]:
+                            part_id = self.PART_INDEX_MAP[class_ind][part_name]
+                            part_mask[part_mask_data] = part_id
                         else:
-                            raise ValueError(f"Class {class_ind} not found in PART_INDEX_MAP")
+                            raise ValueError(f"Part {part_name} not found in PART_INDEX_MAP for class {class_ind}")
+
 
         return cls_mask, inst_mask, part_mask
 
@@ -278,17 +321,13 @@ class PascalPartDataset(Dataset):
 
         # Load part annotation
         part_file = self.voc_root / "Annotations_Part" / f"{image_id}.mat"
-        if part_file.exists():
-            anno = loadmat(str(part_file))
-            cls_mask, inst_mask, part_mask = self._mat2map(anno, np.array(image).shape)
+        anno = loadmat(str(part_file))
+        cls_mask, inst_mask, part_mask = self._mat2map(anno, np.array(image).shape)
 
-            # Convert masks to PIL Images
-            cls_segmentation_map = Image.fromarray(cls_mask.astype(np.uint8))
-            part_segmentation_map = Image.fromarray(part_mask.astype(np.uint8))
-        else:
-            raise FileNotFoundError(f"Part annotation not found for image {image_id}")
+        # Convert masks to PIL Images
+        cls_segmentation_map = Image.fromarray(cls_mask.astype(np.uint8))
+        part_segmentation_map = Image.fromarray(part_mask.astype(np.uint8))
 
-        # Apply transforms if specified
         if self.transform:
             segmentation_maps = [cls_segmentation_map, part_segmentation_map]
             image, segmentation_maps = self.transform(image, segmentation_maps)
@@ -344,7 +383,6 @@ class PascalPartDataModule(L.LightningDataModule):
             batch_size: int = 8,
             crop_size: Tuple[float, float] = (0.8, 0.8),
             num_workers: int = 4,
-            max_parts: int = 100,
     ):
         """
         Args:
@@ -353,7 +391,6 @@ class PascalPartDataModule(L.LightningDataModule):
             batch_size: Batch size for dataloaders
             crop_size: Tuple of (height_ratio, width_ratio) for random cropping during training
             num_workers: Number of workers for data loading
-            max_parts: Maximum number of part classes to support
         """
         super().__init__()
         self.voc_root = voc_root
@@ -361,7 +398,6 @@ class PascalPartDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.crop_size = crop_size
         self.num_workers = num_workers
-        self.max_parts = max_parts
 
     def setup(self, stage=None):
         """Set up train/val/test datasets."""
@@ -371,14 +407,12 @@ class PascalPartDataModule(L.LightningDataModule):
                 split="train",
                 processor=self.processor,
                 crop_size=self.crop_size,
-                max_parts=self.max_parts,
             )
 
         self.val_dataset = PascalPartDataset(
             voc_root=self.voc_root,
             split="val",
             processor=self.processor,
-            max_parts=self.max_parts,
         )
 
         # Pascal VOC doesn't have a separate test set, use val for testing
@@ -431,7 +465,6 @@ class PascalPartDataModule(L.LightningDataModule):
                 voc_root=self.voc_root,
                 split="val",
                 processor=self.processor,
-                max_parts=self.max_parts,
             )
             return temp_dataset.get_num_part_classes()
 
@@ -447,6 +480,7 @@ if __name__ == "__main__":
 
     # Initialize processor
     processor = SegformerImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
+    processor.do_reduce_labels = False
 
     # Create data module
     data_module = PascalPartDataModule(
