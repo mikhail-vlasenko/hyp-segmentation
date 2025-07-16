@@ -420,7 +420,7 @@ class PascalPartDataModule(L.LightningDataModule):
             batch_size: int = 8,
             crop_size: Tuple[float, float] = (0.8, 0.8),
             num_workers: int = 4,
-            zeroshot_class: Optional[str] = None
+            zeroshot_class_idx: Optional[int] = None
     ):
         """
         Args:
@@ -436,7 +436,7 @@ class PascalPartDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.crop_size = crop_size
         self.num_workers = num_workers
-        self.zeroshot_class = zeroshot_class
+        self.zeroshot_class_idx = zeroshot_class_idx
 
     def setup(self, stage=None):
         """Set up train/val/test datasets."""
@@ -446,14 +446,14 @@ class PascalPartDataModule(L.LightningDataModule):
                 split="train",
                 processor=self.processor,
                 crop_size=self.crop_size,
-                exclude_class=self.zeroshot_class
+                exclude_class=self.zeroshot_class_idx
             )
 
         self.val_dataset = PascalPartDataset(
             voc_root=self.voc_root,
             split="val",
             processor=self.processor,
-            include_class=self.zeroshot_class
+            include_class=self.zeroshot_class_idx
         )
 
         # Pascal VOC doesn't have a separate test set, use val for testing
@@ -511,6 +511,12 @@ class PascalPartDataModule(L.LightningDataModule):
 
     def get_zeroshot_class_ids(self):
         """Return the class IDs for the zeroshot class."""
+        if self.zeroshot_class_idx is not None:
+            first = self.val_dataset.class_part_offsets[self.zeroshot_class_idx] + 1
+            last = self.val_dataset.class_part_offsets[self.zeroshot_class_idx + 1]
+            class_ids = list(range(first, last + 1))
+            print(f"Zeroshot class IDs: {class_ids}")
+            return class_ids
         return []
 
 

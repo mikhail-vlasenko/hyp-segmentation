@@ -89,8 +89,9 @@ def main():
             batch_size=args.batch_size,
             crop_size=args.crop_size,
             num_workers=args.num_workers,
-            zeroshot_class=args.zeroshot_class,
+            zeroshot_class_idx=int(args.zeroshot_class),
         )
+        spin_dm.setup()
     else:
         spin_dm = SPINDataModule(
             annotation_dir=dataset_annotation_dir,
