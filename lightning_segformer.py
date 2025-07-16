@@ -169,7 +169,7 @@ def main():
 
     wandb_logger = WandbLogger(
         project="hyperbolic-segmentation",
-        log_model=True,
+        # log_model=True,
     )
 
     wandb_logger.log_hyperparams(vars(args))
