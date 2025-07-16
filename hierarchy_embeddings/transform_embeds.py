@@ -14,8 +14,8 @@ is_part_first = False
 if is_part_first:
     root_dir += "_part-first"
     ROOT_CLASS_INDEX = 1
-embed_dir = root_dir + "/2025-07-16_192910/"
-level = 1
+embed_dir = root_dir + "/2025-07-16_203732/"
+level = 2
 renormalize = False
 centered_bg = False  # when true, the bg is set to root, making it near the center of the disk
 
