@@ -118,7 +118,16 @@ class PascalPartDataset(Dataset):
         },
         11: {},  # diningtable - only silhouette mask
         12: {},  # dog - same as cat + muzzle, will be copied
-        13: {},  # horse - same as cow but with hooves, will be copied
+        13: {    # horse - same as cow but with hooves, and without horns
+            'head': 1, 'eye': 2, 'ear': 3, 'muzzle': 4, 'torso': 5, 'neck': 6, 'uleg': 7, 'lleg': 8,
+            'tail': 9, 'hoof': 10,
+            # Merge leye/reye -> eye, lear/rear -> ear
+            'leye': 2, 'reye': 2, 'lear': 3, 'rear': 3,
+            # Merge front/back upper legs -> uleg, front/back lower legs -> lleg
+            'fuleg': 7, 'buleg': 7, 'lfuleg': 7, 'rfuleg': 7, 'lbuleg': 7, 'rbuleg': 7,
+            'flleg': 8, 'blleg': 8, 'lflleg': 8, 'rflleg': 8, 'lblleg': 8, 'rblleg': 8,
+            'lfho': 10, 'rfho': 10, 'lbho': 10, 'rbho': 10
+        },  
         14: {  # motorbike
             'wheel': 1, 'fwheel': 1, 'bwheel': 1, 'handlebar': 2, 'saddle': 3, 'headlight': 4,
             # Merge all headlight_i -> headlight
@@ -140,17 +149,17 @@ class PascalPartDataset(Dataset):
         18: {},  # sofa - only silhouette mask
         19: {  # train
             'head': 1, 'hfrontside': 2, 'hside': 3, 'hbackside': 4, 'hroofside': 5, 'headlight': 6,
-            'coach': 7, 'cfrontside': 8, 'cside': 9, 'cbackside': 10, 'croofside': 11,
+            'coach': 7, 'cfrontside': 7, 'cside': 7, 'cbackside': 7, 'croofside': 7,
             # Merge hleftside/hrightside -> hside, cleftside/crightside -> cside
             'hleftside': 3, 'hrightside': 3,
             # Merge all numbered parts
             **{f'headlight_{i}': 6 for i in range(1, 11)},
             **{f'coach_{i}': 7 for i in range(1, 11)},
-            **{f'cfrontside_{i}': 8 for i in range(1, 11)},
-            **{f'cleftside_{i}': 9 for i in range(1, 11)},
-            **{f'crightside_{i}': 9 for i in range(1, 11)},
-            **{f'cbackside_{i}': 10 for i in range(1, 11)},
-            **{f'croofside_{i}': 11 for i in range(1, 11)}
+            **{f'cfrontside_{i}': 7 for i in range(1, 11)},
+            **{f'cleftside_{i}': 7 for i in range(1, 11)},
+            **{f'crightside_{i}': 7 for i in range(1, 11)},
+            **{f'cbackside_{i}': 7 for i in range(1, 11)},
+            **{f'croofside_{i}': 7 for i in range(1, 11)}
         },
         20: {'screen': 1}  # tvmonitor
     }
@@ -180,11 +189,6 @@ class PascalPartDataset(Dataset):
         self.PART_INDEX_MAP[7] = self.PART_INDEX_MAP[6].copy()  # car same as bus
         self.PART_INDEX_MAP[12] = self.PART_INDEX_MAP[8].copy()  # dog same as cat
         self.PART_INDEX_MAP[12]['muzzle'] = 10  # dog has additional muzzle (after tail=9)
-        self.PART_INDEX_MAP[13] = self.PART_INDEX_MAP[10].copy()  # horse same as cow
-        # Remove horns and add hooves for horse
-        self.PART_INDEX_MAP[13] = {k: v for k, v in self.PART_INDEX_MAP[13].items()
-                                   if k not in ['horn', 'lhorn', 'rhorn']}
-        self.PART_INDEX_MAP[13].update({'hoof': 11, 'lfho': 11, 'rfho': 11, 'lbho': 11, 'rbho': 11})  # hoof after lleg=9, tail=10
         self.PART_INDEX_MAP[17] = self.PART_INDEX_MAP[10].copy()  # sheep same as cow
 
         # Initialize part index mapping
@@ -273,7 +277,7 @@ class PascalPartDataset(Dataset):
             if self.PART_INDEX_MAP[class_id]:
                 max_part_id = max(self.PART_INDEX_MAP[class_id].values())
                 offset += max_part_id
-        
+
         # Calculate total number of unique part classes
         self.num_part_classes = offset + 1  # +1 for background
 

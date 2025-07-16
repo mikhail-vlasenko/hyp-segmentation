@@ -6,16 +6,16 @@ import torch
 
 
 BG_CLASS_INDEX = 0
-ROOT_CLASS_INDEX = 204
-# root_dir = "../h_embeds/"
-root_dir = "/home/misha/projects/hyp-segmentation/hierarchy_embeddings/hierarchies/hierarchy_embeddings/experiments/spin_dataset/spin_hierarchy"
+ROOT_CLASS_INDEX = 1
+root_dir = ("/home/misha/projects/hyp-segmentation/hierarchy_embeddings/hierarchies/hierarchy_embeddings/experiments/"
+            "pascal_part_dataset/pascal_part_hierarchy_class-first")
 
-is_part_first = True
+is_part_first = False
 if is_part_first:
     root_dir += "_part-first"
     ROOT_CLASS_INDEX = 1
-embed_dir = root_dir + "/2025-05-17_195428/"
-level = 2
+embed_dir = root_dir + "/2025-07-16_192910/"
+level = 1
 renormalize = False
 centered_bg = False  # when true, the bg is set to root, making it near the center of the disk
 
@@ -35,32 +35,24 @@ if centered_bg:
     bg = embeddings.embeddings.weight.tensor[ROOT_CLASS_INDEX]
 else:
     # use the actual bg class
-    bg = embeddings.embeddings.weight.tensor[0]
+    bg = embeddings.embeddings.weight.tensor[BG_CLASS_INDEX]
 
-if level == 3:
-    if is_part_first:
-        raise ValueError("level 3 is not supported for part-first")
-    embeddings.embeddings.weight.tensor = torch.cat(
-        (bg.unsqueeze(0), embeddings.embeddings.weight.tensor[1:ROOT_CLASS_INDEX]), dim=0
-    )
-
-# level2 is 0 for bg and 216 to 255 (incl)
 if level == 2:
     if is_part_first:
         embeddings.embeddings.weight.tensor = embeddings.embeddings.weight.tensor[16:56]
     else:
-        embeddings.embeddings.weight.tensor = embeddings.embeddings.weight.tensor[216:256]
+        embeddings.embeddings.weight.tensor = embeddings.embeddings.weight.tensor[22:]
     embeddings.embeddings.weight.tensor = torch.cat(
-        (embeddings.embeddings.weight.tensor, bg.unsqueeze(0)), dim=0
+        (bg.unsqueeze(0), embeddings.embeddings.weight.tensor), dim=0
     )
 
 if level == 1:
     if is_part_first:
         embeddings.embeddings.weight.tensor = embeddings.embeddings.weight.tensor[2:16]
     else:
-        embeddings.embeddings.weight.tensor = embeddings.embeddings.weight.tensor[205:216]
+        embeddings.embeddings.weight.tensor = embeddings.embeddings.weight.tensor[2:22]
     embeddings.embeddings.weight.tensor = torch.cat(
-        (embeddings.embeddings.weight.tensor, bg.unsqueeze(0)), dim=0
+        (bg.unsqueeze(0), embeddings.embeddings.weight.tensor), dim=0
     )
 
 # print norm
