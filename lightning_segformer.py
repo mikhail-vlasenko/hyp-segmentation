@@ -187,6 +187,7 @@ def main():
         devices="auto",
         accumulate_grad_batches=args.accumulate_grad_batches,
         callbacks=callbacks,
+        log_every_n_steps=5,
     )
 
     trainer.fit(segformer_module, spin_dm)
