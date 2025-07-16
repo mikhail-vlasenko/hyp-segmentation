@@ -128,6 +128,15 @@ class SegformerLightningModule(L.LightningModule):
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         return loss
 
+    def remap_classes(self, targets, ignore_indices, background_class=0):
+        """
+        Remap multiple ignore indices to a single background class
+        """
+        remapped_targets = targets.clone()
+        for ignore_idx in ignore_indices:
+            remapped_targets[targets == ignore_idx] = background_class
+        return remapped_targets
+
     def evaluation_step(self, batch, batch_idx, save_preds=False):
         logits, reprs = self.forward(batch["pixel_values"], eval_mode=True)
         upsampled_logits = {}
@@ -147,6 +156,11 @@ class SegformerLightningModule(L.LightningModule):
             for computed_granularity in upsampled_logits:
                 these_labels = batch[f"labels_{computed_granularity}"]
                 these_preds = preds[computed_granularity]
+                these_labels = self.remap_classes(
+                    these_labels,
+                    self.decode_heads[computed_granularity].train_only_indices,
+                    background_class=background_class_for_granularity(computed_granularity)
+                )
                 self.jaccards[computed_granularity].update(these_preds, these_labels)
                 # self.hierarchical_metrics[computed_granularity].update(these_preds, these_labels)
                 if save_preds:
