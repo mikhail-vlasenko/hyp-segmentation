@@ -89,7 +89,7 @@ def main():
             batch_size=args.batch_size,
             crop_size=args.crop_size,
             num_workers=args.num_workers,
-            zeroshot_class_idx=int(args.zeroshot_class),
+            zeroshot_class_idx=int(args.zeroshot_class) if args.zeroshot_class is not None else None,
         )
         spin_dm.setup()
     else:
