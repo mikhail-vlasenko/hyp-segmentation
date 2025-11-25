@@ -1,5 +1,7 @@
 import copy
 from dataclasses import replace
+import json
+from collections import defaultdict
 
 import torch
 import numpy as np
@@ -17,6 +19,59 @@ from losses import LossParams, PrototypeRatioLoss, hinge_norm_penalty
 from metric import GraphDistanceSoftIoU, compute_distance_matrix
 from segformer_head import HyperbolicSegformerDecodeHead, HeadKwargs, HeadReturnType
 from utils import num_labels_for_granularity, background_class_for_granularity
+
+
+def prediction_idx_to_hierarchy_id(granularity, idx):
+    """
+    Convert prediction index to hierarchy node ID.
+    
+    Args:
+        granularity: "subpart", "part", or "whole"
+        idx: prediction class index
+    
+    Returns:
+        int: hierarchy node ID
+    """
+    bg_idx = background_class_for_granularity(granularity)
+    
+    # Background always maps to 0 in hierarchy
+    if idx == bg_idx:
+        return 0
+    
+    if granularity == "subpart":
+        # Level 3: direct mapping (0-203), background at 0
+        return idx
+    elif granularity == "part":
+        # Level 2: classes 0-39 map to 216-255, background at 40
+        return 216 + idx
+    elif granularity == "whole":
+        # Level 1: classes 0-10 map to 205-215, background at 11
+        return 205 + idx
+    else:
+        raise ValueError(f"Unknown granularity: {granularity}")
+
+
+def load_hierarchy_mappings(hierarchy_path):
+    """
+    Load hierarchy and create parent-child mappings.
+    
+    Returns:
+        dict: {child_id: parent_id} for subpart→part and part→whole
+    """
+    with open(hierarchy_path, 'r') as f:
+        hierarchy = json.load(f)
+    
+    # Build adjacency: parent -> children
+    parent_to_children = defaultdict(list)
+    for link in hierarchy['links']:
+        parent_to_children[link['source']].append(link['target'])
+    
+    # Build child -> parent mapping
+    child_to_parent = {}
+    for link in hierarchy['links']:
+        child_to_parent[link['target']] = link['source']
+    
+    return child_to_parent
 
 
 class SegformerLightningModule(L.LightningModule):
@@ -70,6 +125,15 @@ class SegformerLightningModule(L.LightningModule):
             for g in self.prediction_granularities
         })
         self.hierarchical_metrics = self.configure_hierarchical_metrics()
+
+        # Load hierarchy mappings for spatial consistency
+        self.child_to_parent = load_hierarchy_mappings("hierarchy_embeddings/spin_dataset/spin_hierarchy.json")
+        
+        # Containers for spatial consistency scores
+        self.spatial_consistency_scores = {
+            "subpart_to_part": [],
+            "part_to_whole": []
+        }
 
         # Prepare containers for test predictions and targets.
         self.test_preds = {g: [] for g in self.prediction_granularities}
@@ -149,9 +213,14 @@ class SegformerLightningModule(L.LightningModule):
                 these_preds = preds[computed_granularity]
                 self.jaccards[computed_granularity].update(these_preds, these_labels)
                 self.hierarchical_metrics[computed_granularity].update(these_preds, these_labels)
-                if save_preds:
-                    self.test_preds[computed_granularity].append(these_preds.detach().cpu())
-                    self.test_targets[computed_granularity].append(these_labels.detach().cpu())
+                # fixme: removed to save memory
+                # if save_preds:
+                #     self.test_preds[computed_granularity].append(these_preds.detach().cpu())
+                #     self.test_targets[computed_granularity].append(these_labels.detach().cpu())
+        
+        # Compute spatial consistency scores
+        if save_preds and "subpart" in preds and "part" in preds and "whole" in preds:
+            self._compute_spatial_consistency(preds)
         # # === DEBUG DUMP & EXIT ===
         # if save_preds:
         #     import seaborn as sns
@@ -256,38 +325,125 @@ class SegformerLightningModule(L.LightningModule):
         self.log("test_loss", test_loss, on_step=False, on_epoch=True, prog_bar=True)
         return test_loss
 
+    def _compute_containment_scores(self, child_pred, parent_pred, child_granularity, parent_granularity):
+        """
+        Compute containment scores for child→parent relationship.
+        
+        Args:
+            child_pred: predictions for child level
+            parent_pred: predictions for parent level
+            child_granularity: granularity name for child ("subpart" or "part")
+            parent_granularity: granularity name for parent ("part" or "whole")
+        
+        Returns:
+            list: Containment ratios for each child instance
+        """
+        batch_size = child_pred.shape[0]
+        scores = []
+        
+        # Get background indices for each granularity
+        child_bg = background_class_for_granularity(child_granularity)
+        parent_bg = background_class_for_granularity(parent_granularity)
+        
+        for b in range(batch_size):
+            unique_children = np.unique(child_pred[b])
+            for child_idx in unique_children:
+                if child_idx == child_bg:  # Skip background
+                    continue
+                
+                # Convert prediction indices to hierarchy node IDs
+                child_id = prediction_idx_to_hierarchy_id(child_granularity, int(child_idx))
+                
+                # Find parent in hierarchy
+                if child_id not in self.child_to_parent:
+                    continue
+                parent_hierarchy_id = self.child_to_parent[child_id]
+                
+                # Convert parent hierarchy ID back to prediction index
+                # Background (id=0) maps to background index for that granularity
+                if parent_hierarchy_id == 0:
+                    parent_idx = parent_bg
+                elif parent_granularity == "part":
+                    # Parts: hierarchy 216-255 -> prediction 0-39
+                    parent_idx = parent_hierarchy_id - 216
+                elif parent_granularity == "whole":
+                    # Wholes: hierarchy 205-215 -> prediction 0-10
+                    parent_idx = parent_hierarchy_id - 205
+                else:
+                    # Subparts: direct mapping
+                    parent_idx = parent_hierarchy_id
+                
+                # Create binary masks and compute containment
+                child_mask = (child_pred[b] == child_idx)
+                parent_mask = (parent_pred[b] == parent_idx)
+                child_size = child_mask.sum()
+                
+                if child_size > 0:
+                    intersection_size = (child_mask & parent_mask).sum()
+                    containment_ratio = intersection_size / child_size
+                    scores.append(containment_ratio)
+        
+        return scores
+    
+    def _compute_spatial_consistency(self, preds):
+        """
+        Compute spatial consistency between hierarchical levels.
+        """
+        subpart_pred = preds["subpart"].detach().cpu().numpy()
+        part_pred = preds["part"].detach().cpu().numpy()
+        whole_pred = preds["whole"].detach().cpu().numpy()
+        
+        # Subpart → Part consistency
+        subpart_to_part_scores = self._compute_containment_scores(
+            subpart_pred, part_pred, "subpart", "part"
+        )
+        if len(subpart_to_part_scores) > 0:
+            self.spatial_consistency_scores["subpart_to_part"].append(
+                np.mean(subpart_to_part_scores)
+            )
+        
+        # Part → Whole consistency
+        part_to_whole_scores = self._compute_containment_scores(
+            part_pred, whole_pred, "part", "whole"
+        )
+        if len(part_to_whole_scores) > 0:
+            self.spatial_consistency_scores["part_to_whole"].append(
+                np.mean(part_to_whole_scores)
+            )
+
     def on_test_epoch_end(self):
         self.on_eval_epoch_end("test")
         import matplotlib.pyplot as plt
         from sklearn.metrics import confusion_matrix
         import numpy.ma as ma
 
-        for granularity in self.granularities:
-            # Aggregate predictions and targets across batches.
-            preds = torch.cat(self.test_preds[granularity], dim=0).numpy().flatten()
-            targets = torch.cat(self.test_targets[granularity], dim=0).numpy().flatten()
-            share_correct = np.sum(preds == targets) / len(preds)
-            num_classes = num_labels_for_granularity(granularity)
-            # Compute confusion matrix. Ensure that all classes are represented.
-            cm = confusion_matrix(targets, preds, labels=list(range(num_classes)))
-            cm = np.log1p(cm)  # Apply log1p to avoid log(0)
-            # set diagonal to 0
-            np.fill_diagonal(cm, 0)
-            cm_masked = ma.masked_where(cm == 0, cm)
-
-            fig, ax = plt.subplots(figsize=(12, 10), dpi=300)
-            cax = ax.matshow(cm_masked, cmap=plt.cm.Reds, vmin=0.0)
-            fig.colorbar(cax)
-            ax.set_title(f"Log-Scale Confusion Matrix for {granularity}. Share correct: {share_correct:.2f}")
-            ax.set_xlabel("Predicted")
-            ax.set_ylabel("True")
-            plt.tight_layout()
-
-            plt.savefig(f"confusion_matrix_{granularity}.png")
-            plt.clf()
+        # fixme: removed to save memory
+        # for granularity in self.granularities:
+        #     # Aggregate predictions and targets across batches.
+        #     preds = torch.cat(self.test_preds[granularity], dim=0).numpy().flatten()
+        #     targets = torch.cat(self.test_targets[granularity], dim=0).numpy().flatten()
+        #     share_correct = np.sum(preds == targets) / len(preds)
+        #     num_classes = num_labels_for_granularity(granularity)
+        #     # Compute confusion matrix. Ensure that all classes are represented.
+        #     cm = confusion_matrix(targets, preds, labels=list(range(num_classes)))
+        #     cm = np.log1p(cm)  # Apply log1p to avoid log(0)
+        #     # set diagonal to 0
+        #     np.fill_diagonal(cm, 0)
+        #     cm_masked = ma.masked_where(cm == 0, cm)
+        #
+        #     fig, ax = plt.subplots(figsize=(12, 10), dpi=300)
+        #     cax = ax.matshow(cm_masked, cmap=plt.cm.Reds, vmin=0.0)
+        #     fig.colorbar(cax)
+        #     ax.set_title(f"Log-Scale Confusion Matrix for {granularity}. Share correct: {share_correct:.2f}")
+        #     ax.set_xlabel("Predicted")
+        #     ax.set_ylabel("True")
+        #     plt.tight_layout()
+        #
+        #     plt.savefig(f"confusion_matrix_{granularity}.png")
+        #     plt.clf()
         # Reset the stored predictions and targets.
-        self.test_preds = {g: [] for g in self.granularities}
-        self.test_targets = {g: [] for g in self.granularities}
+        self.test_preds = {g: [] for g in self.prediction_granularities}
+        self.test_targets = {g: [] for g in self.prediction_granularities}
 
     def on_eval_epoch_end(self, prefix="val"):
         for granularity in self.prediction_granularities:
@@ -297,6 +453,21 @@ class SegformerLightningModule(L.LightningModule):
             self.log(f"{prefix}_hierarchical_mIoU_{granularity}", hierarchical_metric.compute(), prog_bar=True)
             metric.reset()
             hierarchical_metric.reset()
+        
+        # Log spatial consistency scores
+        if len(self.spatial_consistency_scores["subpart_to_part"]) > 0:
+            score = np.mean(self.spatial_consistency_scores["subpart_to_part"])
+            self.log(f"{prefix}_spatial_consistency_subpart_to_part", score, prog_bar=True)
+        
+        if len(self.spatial_consistency_scores["part_to_whole"]) > 0:
+            score = np.mean(self.spatial_consistency_scores["part_to_whole"])
+            self.log(f"{prefix}_spatial_consistency_part_to_whole", score, prog_bar=True)
+        
+        # Reset spatial consistency scores
+        self.spatial_consistency_scores = {
+            "subpart_to_part": [],
+            "part_to_whole": []
+        }
 
     def on_validation_epoch_end(self):
         self.on_eval_epoch_end("val")

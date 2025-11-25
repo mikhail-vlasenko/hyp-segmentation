@@ -130,8 +130,8 @@ class HyperbolicSegformerDecodeHead(SegformerDecodeHead):
         for key, value in args.embeddings_paths.items():
             # independent_heads ensures there is at most one prototype set for each head
             if not args.independent_heads or key == self.primary_granularity:
-                # value = value.replace("/home/mvlasenko/hyperbolic/hyp-segmentation/h_embeds/",
-                #               "hierarchy_embeddings/hierarchies/hierarchy_embeddings/experiments/spin_dataset/spin_hierarchy/")
+                value = value.replace("/home/mvlasenko/hyperbolic/hyp-segmentation/h_embeds/",
+                              "hierarchy_embeddings/hierarchies/hierarchy_embeddings/experiments/spin_dataset/spin_hierarchy/")
                 self.prototypes[key] = torch.load(value, weights_only=False).embeddings.weight.tensor.requires_grad_(False)
 
         if self.max_class_sep:
