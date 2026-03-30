@@ -1,5 +1,31 @@
-# Hyperbolic Part-Whole Segmentation
-### MSc thesis by Mikhail Vlasenko
+# Hyperbolic Part-Whole Image Segmentation
 
-## Abstract
-Semantic segmentation typically focuses on classification at a single predefined granularity, neglecting the inherent hierarchical structure of natural entities. Yet, objects naturally decompose into parts and subparts, mirroring human visual perception. To bridge this gap, we introduce a hyperbolic prototypical segmentation framework capable of simultaneously representing multiple granularity levels within a unified embedding space. Leveraging hyperbolic geometry's capacity to model hierarchies efficiently, we propose embedding class prototypes within the Poincaré ball. We introduce a tree-aware prototype initialization strategy and a distortion-\textit{p} loss that together yield significantly improved hierarchical embeddings. Furthermore, we derive an optimized formulation of the hyperbolic distance function, enabling tractable inference for dense prediction tasks. A shared transformer encoder paired with separate hyperbolic heads allows efficient multi-level segmentation from a single model. During inference, the model can produce coarse-level predictions without any supervision beyond fine-grained labels, exploiting the alignment of all prototypes on the manifold. Experiments on the SubPartImageNet dataset advance state-of-the-art mIoU at subpart and part levels by 9\% and 11\% respectively, and demonstrate remarkable zero-shot capabilities, while using a model two orders of magnitude smaller than prior work.
+Official code for **"Hyperbolic Part-Whole Image Segmentation"**, accepted at AISTATS 2026.
+
+## Overview
+
+We introduce a hyperbolic prototypical segmentation framework that simultaneously segments images at **object**, **part**, and **subpart** granularity levels within a unified embedding space. By embedding class prototypes on the Poincare ball, the model captures the natural hierarchy between classes, enabling:
+
+- **State-of-the-art** part and subpart segmentation on SubPartImageNet (SPIN), surpassing multi-billion-parameter models with only ~73M parameters
+- **Zero-shot generalization** via hierarchy-aware prototypes
+- **Cross-level transfer** from subpart-level supervision to object-level predictions without object-level labels
+
+### Key Results on SPIN
+
+| Model | Object mIoU | Part mIoU | Subpart mIoU | # Params |
+|---|---|---|---|---|
+| GLaMM-FT | 0.911 | 0.608 | 0.246 | 3x7B |
+| HALLUMI | 0.893 | 0.582 | 0.185 | 7B |
+| **Ours** | 0.895 | **0.677** | **0.268** | **73M** |
+
+
+## Citation
+
+```bibtex
+@inproceedings{vlasenko2026hyperbolic,
+  title={Hyperbolic Part-Whole Image Segmentation},
+  author={Vlasenko, Mikhail and Ghadimi Atigh, Mina and Mettes, Pascal},
+  booktitle={International Conference on Artificial Intelligence and Statistics (AISTATS)},
+  year={2026}
+}
+```
